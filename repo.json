@@ -1,0 +1,16 @@
+[
+  {
+    "id": "mangadex-fr",
+    "name": "MangaDex (FR)",
+    "version": "1.0.0",
+    "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/mangadex.js",
+    "icon_url": "https://mangadex.org/favicon.ico"
+  },
+  {
+    "id": "asura-scans",
+    "name": "Asura Scans",
+    "version": "1.0.0",
+    "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/asura.js",
+    "icon_url": "https://www.asurascans.com/wp-content/uploads/2021/03/Group_1.png"
+  }
+]
