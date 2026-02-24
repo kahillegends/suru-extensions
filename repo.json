@@ -17,7 +17,7 @@
     "id": "sushi-scan",
     "name": "Sushi-scan",
     "version": "1.0.0",
-    "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/sushiscan.js",
+    "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/sushiscan.js?v=1",
     "icon_url": "https://sushiscan.net/wp-content/uploads/2021/11/favicon.png"
   }
 ]
