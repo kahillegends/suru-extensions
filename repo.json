@@ -12,5 +12,10 @@
     "version": "1.0.0",
     "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/asura.js",
     "icon_url": "https://www.asurascans.com/wp-content/uploads/2021/03/Group_1.png"
-  }
+  },
+  {
+    "id":"sushi-scan",
+    "name": "Sushi-scan",
+    "version": "1.0.0",
+    "source_url":"https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/sushiscan.js" 
 ]
