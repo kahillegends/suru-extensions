@@ -1,22 +1,29 @@
-// --- EXTENSION SURU : SUSHI-SCAN ---
+// --- EXTENSION SURU : SUSHI-SCAN (VERSION AMÉLIORÉE) ---
 
 const SushiScanExtension = {
     name: "Sushi-scan",
-    baseUrl: "https://sushiscan.net", // Assure-toi que c'est l'URL actuelle du site (elle change parfois)
+    baseUrl: "https://sushiscan.net",
 
-    // Fonction interne : Vérifie si le HTML retourné est un test Cloudflare
+    // ✅ Fonction interne : Vérifie si le HTML retourné est un test Cloudflare
     _checkCloudflare: function(html) {
-        if (html.includes("Just a moment...") || html.includes("cf-browser-verification") || html.includes("Ray ID:")) {
+        const lowerHtml = html.toLowerCase();
+        if (lowerHtml.includes("just a moment") 
+            || lowerHtml.includes("cf-browser-verification") 
+            || lowerHtml.includes("ray id")
+            || lowerHtml.includes("checking your browser")
+            || lowerHtml.includes("attention required")
+            || lowerHtml.includes("cloudflare")
+            || html.length < 500) { // Si la page est trop courte, c'est suspect
             return true;
         }
         return false;
     },
 
-    // Fonction interne : Renvoie le "faux" manga qui déclenche l'écran rouge de Bypass
+    // ✅ Fonction interne : Renvoie le "faux" manga qui déclenche l'écran rouge de Bypass
     _getCloudflareError: function() {
         return [{
             id: "cf-error",
-            title: "Bypass Requis",
+            title: "🛡️ Protection Cloudflare Détectée",
             cover: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Cloudflare_Logo.svg/1024px-Cloudflare_Logo.svg.png"
         }];
     },
@@ -24,31 +31,38 @@ const SushiScanExtension = {
     // 1. PAGE D'ACCUEIL (Populaires)
     getPopular: async function(page, invoke) {
         try {
-            // Sushi-scan gère les pages avec /page/2/ etc...
             const pageStr = page > 0 ? `page/${page + 1}/` : '';
             const url = `${this.baseUrl}/manga/${pageStr}?order=popular`;
             
+            console.log(`📡 Chargement de: ${url}`);
             const html = await invoke('fetch_html', { url: url });
             
-            // Si on est bloqué, on lève l'alerte !
-            if (this._checkCloudflare(html)) return this._getCloudflareError();
+            // ⚠️ Si on est bloqué, on lève l'alerte !
+            if (this._checkCloudflare(html)) {
+                console.warn("🛑 Cloudflare détecté sur getPopular");
+                return this._getCloudflareError();
+            }
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             
-            // Cherche toutes les cartes de mangas (classe .bsx sur Sushi-scan)
+            // Cherche toutes les cartes de mangas
             const elements = doc.querySelectorAll('.bsx');
+            console.log(`✅ ${elements.length} mangas trouvés`);
+            
             return Array.from(elements).map(el => {
                 const a = el.querySelector('a');
                 const img = el.querySelector('img');
+                const titleEl = el.querySelector('.tt, .ntitle');
+                
                 return {
-                    id: a ? a.href : '', // L'URL complète sert d'ID pour l'extension
-                    title: a ? a.title || img?.alt || el.querySelector('.tt')?.innerText?.trim() : 'Titre inconnu',
+                    id: a ? a.href : '',
+                    title: titleEl ? titleEl.innerText.trim() : (a ? a.title || img?.alt : 'Titre inconnu'),
                     cover: img ? (img.src || img.dataset.src || img.dataset.lazySrc) : ''
                 };
-            }).filter(m => m.id !== ''); // Retire les éléments invalides
+            }).filter(m => m.id !== '' && m.cover !== '');
         } catch (error) {
-            console.error("Erreur getPopular SushiScan:", error);
+            console.error("❌ Erreur getPopular SushiScan:", error);
             return [];
         }
     },
@@ -59,25 +73,33 @@ const SushiScanExtension = {
             const pageStr = page > 0 ? `page/${page + 1}/` : '';
             const url = `${this.baseUrl}/${pageStr}?s=${encodeURIComponent(query)}`;
             
+            console.log(`🔍 Recherche: ${url}`);
             const html = await invoke('fetch_html', { url: url });
             
-            if (this._checkCloudflare(html)) return this._getCloudflareError();
+            if (this._checkCloudflare(html)) {
+                console.warn("🛑 Cloudflare détecté sur search");
+                return this._getCloudflareError();
+            }
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             
             const elements = doc.querySelectorAll('.bsx');
+            console.log(`✅ ${elements.length} résultats trouvés`);
+            
             return Array.from(elements).map(el => {
                 const a = el.querySelector('a');
                 const img = el.querySelector('img');
+                const titleEl = el.querySelector('.tt, .ntitle');
+                
                 return {
                     id: a ? a.href : '',
-                    title: a ? a.title || img?.alt || el.querySelector('.tt')?.innerText?.trim() : 'Titre inconnu',
+                    title: titleEl ? titleEl.innerText.trim() : (a ? a.title || img?.alt : 'Titre inconnu'),
                     cover: img ? (img.src || img.dataset.src || img.dataset.lazySrc) : ''
                 };
-            }).filter(m => m.id !== '');
+            }).filter(m => m.id !== '' && m.cover !== '');
         } catch (error) {
-            console.error("Erreur search SushiScan:", error);
+            console.error("❌ Erreur search SushiScan:", error);
             return [];
         }
     },
@@ -85,29 +107,34 @@ const SushiScanExtension = {
     // 3. LISTE DES CHAPITRES
     getChapters: async function(mangaUrl, invoke) {
         try {
+            console.log(`📖 Chargement chapitres: ${mangaUrl}`);
             const html = await invoke('fetch_html', { url: mangaUrl });
             
-            // Si on est bloqué ici, on renvoie une liste vide, l'utilisateur devra aller sur l'accueil de la source pour se débloquer
-            if (this._checkCloudflare(html)) throw new Error("Bloqué par Cloudflare sur la page chapitres.");
+            if (this._checkCloudflare(html)) {
+                console.error("🛑 Cloudflare détecté sur getChapters");
+                throw new Error("Cloudflare bloque la page des chapitres. Veuillez faire le bypass depuis l'accueil.");
+            }
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             
-            // Les chapitres sont souvent dans une liste <ul> avec ces classes
+            // Les chapitres sont dans ces sélecteurs
             const elements = doc.querySelectorAll('#chapterlist li a, .clstyle li a, .eplister li a');
+            console.log(`✅ ${elements.length} chapitres trouvés`);
             
             return Array.from(elements).map(a => {
                 const titleEl = a.querySelector('.chapternum');
                 const dateEl = a.querySelector('.chapterdate');
+                
                 return {
-                    id: a.href, // L'URL du chapitre est l'ID
+                    id: a.href,
                     title: titleEl ? titleEl.innerText.trim() : a.innerText.trim(),
-                    number: titleEl ? titleEl.innerText.replace(/[^0-9.]/g, '') : '', // Extrait juste les chiffres
+                    number: titleEl ? titleEl.innerText.replace(/[^0-9.]/g, '') : '',
                     date: dateEl ? dateEl.innerText.trim() : ''
                 };
             });
         } catch (error) {
-            console.error("Erreur getChapters SushiScan:", error);
+            console.error("❌ Erreur getChapters SushiScan:", error);
             return [];
         }
     },
@@ -115,21 +142,26 @@ const SushiScanExtension = {
     // 4. RÉCUPÉRATION DES IMAGES D'UN CHAPITRE
     getPages: async function(chapterUrl, invoke) {
         try {
+            console.log(`📄 Chargement pages: ${chapterUrl}`);
             const html = await invoke('fetch_html', { url: chapterUrl });
-            if (this._checkCloudflare(html)) throw new Error("Bloqué par Cloudflare sur la page lecture.");
+            
+            if (this._checkCloudflare(html)) {
+                console.error("🛑 Cloudflare détecté sur getPages");
+                throw new Error("Cloudflare bloque la page de lecture. Veuillez faire le bypass depuis l'accueil.");
+            }
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             
-            // Toutes les images de lecture sont contenues dans cette div
-            const elements = doc.querySelectorAll('#readerarea img');
+            // Toutes les images de lecture
+            const elements = doc.querySelectorAll('#readerarea img, .rdminimal img, .reader-area img');
+            console.log(`✅ ${elements.length} pages trouvées`);
             
             return Array.from(elements).map(img => {
-                // Parfois le site cache l'image dans un 'data-src' pour l'optimisation
-                return img.src || img.dataset.src || img.dataset.lazySrc;
-            }).filter(src => src && !src.includes('loader')); // On exclut les gifs de chargement
+                return img.src || img.dataset.src || img.dataset.lazySrc || '';
+            }).filter(src => src && !src.includes('loader') && !src.includes('loading'));
         } catch (error) {
-            console.error("Erreur getPages SushiScan:", error);
+            console.error("❌ Erreur getPages SushiScan:", error);
             return [];
         }
     }
