@@ -1,15 +1,22 @@
-// --- EXTENSION SURU : SUSHI-SCAN (VERSION OPTIMISÉE POUR SCRAPER INVISIBLE) ---
+// --- EXTENSION SURU : SUSHI-SCAN (VERSION OPTIMISÉE ANTI-CLOUDFLARE) ---
 
 const SushiScanExtension = {
     name: "Sushi-scan",
     baseUrl: "https://sushiscan.net",
 
+    // ✅ FIX : Ajout de la vérification "CF_BLOCKED" et "TIMEOUT" envoyés par Rust
     _checkCloudflare: function(html) {
+        if (!html) return true;
+        // Codes d'erreur explicites envoyés par fetch_html côté Rust
+        if (html === "CF_BLOCKED" || html === "TIMEOUT") return true;
+
         const lowerHtml = html.toLowerCase();
-        return (lowerHtml.includes("just a moment") 
+        return (
+            lowerHtml.includes("just a moment") 
             || lowerHtml.includes("cloudflare") 
             || lowerHtml.includes("cf-browser-verification")
-            || html.length < 1000); // Protection si le HTML est quasi vide
+            || html.length < 500  // ✅ FIX : seuil relevé de 1000 à 500 (plus robuste)
+        );
     },
 
     _getCloudflareError: function() {
@@ -26,6 +33,7 @@ const SushiScanExtension = {
             const url = `${this.baseUrl}/manga/${pageStr}?order=popular`;
             const html = await invoke('fetch_html', { url: url });
             
+            // ✅ FIX : Vérification unifiée avec les nouveaux codes d'erreur
             if (this._checkCloudflare(html)) return this._getCloudflareError();
 
             const parser = new DOMParser();
@@ -35,8 +43,6 @@ const SushiScanExtension = {
             return Array.from(elements).map(el => {
                 const a = el.querySelector('a');
                 const img = el.querySelector('img');
-                
-                // Extraction robuste de l'image
                 const cover = img ? (img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('src') || '') : '';
                 
                 return {
@@ -46,6 +52,7 @@ const SushiScanExtension = {
                 };
             }).filter(m => m.id !== '' && m.cover !== '');
         } catch (error) {
+            console.error("getPopular error:", error);
             return [];
         }
     },
@@ -56,6 +63,7 @@ const SushiScanExtension = {
             const url = `${this.baseUrl}/${pageStr}?s=${encodeURIComponent(query)}`;
             const html = await invoke('fetch_html', { url: url });
             
+            // ✅ FIX : Vérification unifiée
             if (this._checkCloudflare(html)) return this._getCloudflareError();
 
             const parser = new DOMParser();
@@ -74,6 +82,7 @@ const SushiScanExtension = {
                 };
             }).filter(m => m.id !== '' && m.cover !== '');
         } catch (error) {
+            console.error("search error:", error);
             return [];
         }
     },
@@ -81,11 +90,12 @@ const SushiScanExtension = {
     getChapters: async function(mangaUrl, invoke) {
         try {
             const html = await invoke('fetch_html', { url: mangaUrl });
-            if (this._checkCloudflare(html)) throw new Error("Bypass requis");
+
+            // ✅ FIX : Vérification unifiée
+            if (this._checkCloudflare(html)) throw new Error("CF_BYPASS_REQUIRED");
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            // Sélecteur élargi pour plus de compatibilité
             const elements = doc.querySelectorAll('#chapterlist li a, .eplister li a, .clstyle li a');
             
             return Array.from(elements).map(a => {
@@ -98,6 +108,7 @@ const SushiScanExtension = {
                 };
             });
         } catch (error) {
+            console.error("getChapters error:", error);
             return [];
         }
     },
@@ -105,17 +116,19 @@ const SushiScanExtension = {
     getPages: async function(chapterUrl, invoke) {
         try {
             const html = await invoke('fetch_html', { url: chapterUrl });
-            if (this._checkCloudflare(html)) throw new Error("Bypass requis");
+
+            // ✅ FIX : Vérification unifiée
+            if (this._checkCloudflare(html)) throw new Error("CF_BYPASS_REQUIRED");
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             const images = doc.querySelectorAll('#readerarea img');
             
             return Array.from(images).map(img => {
-                // Pour le lecteur, on prend TOUT ce qui ressemble à une URL
                 return img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('src') || '';
             }).filter(src => src && !src.includes('loader') && src.startsWith('http'));
         } catch (error) {
+            console.error("getPages error:", error);
             return [];
         }
     }
