@@ -5,26 +5,27 @@
     _checkCloudflare: function(html) {
         return html === 'CF_BLOCKED' 
             || html === 'TIMEOUT' 
-            || html.includes("Just a moment") 
+            || html.toLowerCase().includes("just a moment") 
+            || html.toLowerCase().includes("cloudflare")
             || html.length < 500;
     },
 
-    // 1. PAGE POPULAIRE
+    // 1. PAGE POPULAIRE (Correction du 404)
     getPopular: async function(page, invoke) {
         try {
-            // ✅ CORRECTION DU 404 : On tape sur l'accueil ou l'annuaire au lieu de filterList
-            const url = page === 0 ? this.baseUrl : `${this.baseUrl}/manga-list?page=${page}`;
+            // On attaque directement la liste des mangas, fini la page d'accueil cassée !
+            const pageParam = page > 0 ? `?page=${page + 1}` : '';
+            const url = `${this.baseUrl}/manga-list${pageParam}`; 
+            
             const html = await invoke('fetch_html', { url: url });
             
-            if (this._checkCloudflare(html)) {
-                return [{ id: "cf-error", title: "Bypass Requis", cover: "" }];
-            }
+            if (this._checkCloudflare(html)) return [{ id: "cf-error", title: "Bypass Requis", cover: "" }];
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             
-            // Scan-VF range souvent ses mangas dans des div .media, .manga-box ou des listes
-            const elements = doc.querySelectorAll('.media, .manga-box, .manga-item, .item');
+            // Filet très large pour attraper les mangas peu importe le thème
+            const elements = doc.querySelectorAll('.media, .manga-box, .manga-item, .item, .bsx');
             
             return Array.from(elements).map(el => {
                 const a = el.querySelector('a');
@@ -32,12 +33,11 @@
                 
                 return {
                     id: a ? a.href : '',
-                    title: a ? a.innerText.trim() || img?.getAttribute('alt') : "Inconnu",
-                    cover: img ? (img.getAttribute('data-src') || img.getAttribute('src') || '') : ''
+                    title: a ? (a.innerText.trim() || a.getAttribute('title') || img?.getAttribute('alt')) : "Inconnu",
+                    cover: img ? (img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('src') || '') : ''
                 };
             }).filter(m => m.id !== '' && m.cover !== '');
         } catch (error) {
-            console.error("Erreur Scan-VF getPopular:", error);
             return [];
         }
     },
@@ -48,13 +48,11 @@
             const url = `${this.baseUrl}/search?query=${encodeURIComponent(query)}`;
             const html = await invoke('fetch_html', { url: url });
             
-            if (this._checkCloudflare(html)) {
-                return [{ id: "cf-error", title: "Bypass Requis", cover: "" }];
-            }
+            if (this._checkCloudflare(html)) return [{ id: "cf-error", title: "Bypass Requis", cover: "" }];
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            const elements = doc.querySelectorAll('.media, .manga-box');
+            const elements = doc.querySelectorAll('.media, .manga-box, .manga-item, .item, .bsx');
             
             return Array.from(elements).map(el => {
                 const a = el.querySelector('a');
@@ -62,41 +60,44 @@
                 
                 return {
                     id: a ? a.href : '',
-                    title: a ? a.innerText.trim() : "Inconnu",
+                    title: a ? (a.innerText.trim() || a.getAttribute('title')) : "Inconnu",
                     cover: img ? (img.getAttribute('data-src') || img.getAttribute('src') || '') : ''
                 };
             }).filter(m => m.id !== '' && m.cover !== '');
         } catch (error) {
-            console.error("Erreur Scan-VF search:", error);
             return [];
         }
     },
 
-    // 3. CHAPITRES
+    // 3. CHAPITRES (Correction du "0 Chapitres")
     getChapters: async function(mangaUrl, invoke) {
         try {
             const html = await invoke('fetch_html', { url: mangaUrl });
-            
             if (this._checkCloudflare(html)) throw new Error("Bypass requis");
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            const elements = doc.querySelectorAll('.chapters li');
+            
+            // On attrape toutes les listes de chapitres possibles (anciens et nouveaux thèmes)
+            const elements = doc.querySelectorAll('.chapters li, #chapterlist li, .eplister li, .clstyle li, .wp-manga-chapter');
             
             return Array.from(elements).map(li => {
-                const a = li.querySelector('h5 a') || li.querySelector('a');
-                const dateEl = li.querySelector('.date-chapter-title-rtl');
-                
+                const a = li.querySelector('a');
                 if (!a) return null;
+
+                const titleEl = li.querySelector('h5, .chapternum, .chapter-title-rtl') || a;
+                const dateEl = li.querySelector('.date-chapter-title-rtl, .chapterdate, .chapter-release-date');
+                
+                // Nettoyage du titre (enlève les espaces en trop)
+                let cleanTitle = titleEl.innerText.trim().replace(/\s+/g, ' ');
                 
                 return {
                     id: a.href,
-                    title: a.innerText.trim(),
+                    title: cleanTitle,
                     date: dateEl ? dateEl.innerText.trim() : ""
                 };
             }).filter(c => c !== null);
         } catch (error) {
-            console.error("Erreur Scan-VF getChapters:", error);
             return [];
         }
     },
@@ -105,18 +106,18 @@
     getPages: async function(chapterUrl, invoke) {
         try {
             const html = await invoke('fetch_html', { url: chapterUrl });
-            
             if (this._checkCloudflare(html)) throw new Error("Bypass requis");
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            const images = doc.querySelectorAll('.img-responsive, #all img');
+            
+            // Sélecteurs de lecteur
+            const images = doc.querySelectorAll('.img-responsive, #all img, #readerarea img, .reading-content img');
             
             return Array.from(images).map(img => {
-                return img.getAttribute('data-src') || img.getAttribute('src') || '';
+                return img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('src') || '';
             }).filter(src => src !== '' && !src.includes('bg-transparent') && src.startsWith('http'));
         } catch (error) {
-            console.error("Erreur Scan-VF getPages:", error);
             return [];
         }
     }
