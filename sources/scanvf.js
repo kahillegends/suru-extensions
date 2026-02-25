@@ -69,7 +69,7 @@
         }
     },
 
-    // 3. CHAPITRES (Correction du "0 Chapitres")
+  // 3. CHAPITRES (Aspirateur Universel)
     getChapters: async function(mangaUrl, invoke) {
         try {
             const html = await invoke('fetch_html', { url: mangaUrl });
@@ -78,28 +78,55 @@
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             
-            // On attrape toutes les listes de chapitres possibles (anciens et nouveaux thèmes)
-            const elements = doc.querySelectorAll('.chapters li, #chapterlist li, .eplister li, .clstyle li, .wp-manga-chapter');
+            // On cherche tous les blocs où ils pourraient cacher les chapitres
+            const listContainers = doc.querySelectorAll('.chapters, #chapterlist, .eplister, .clstyle, .wp-manga-chapter, .list-chapters, .chap-list, .chap-box');
+            let links = [];
             
-            return Array.from(elements).map(li => {
-                const a = li.querySelector('a');
-                if (!a) return null;
+            if (listContainers.length > 0) {
+                // S'il trouve un bloc, il prend tous les liens dedans
+                listContainers.forEach(container => {
+                    container.querySelectorAll('a').forEach(a => links.push(a));
+                });
+            } else {
+                // S'il ne trouve rien (ils ont encore changé le design), on prend TOUS les liens de la page !
+                doc.querySelectorAll('a').forEach(a => {
+                    if (a.href && (a.href.includes('chapitre-') || a.href.includes('chapter-') || a.innerText.toLowerCase().includes('chapitre '))) {
+                        links.push(a);
+                    }
+                });
+            }
 
-                const titleEl = li.querySelector('h5, .chapternum, .chapter-title-rtl') || a;
-                const dateEl = li.querySelector('.date-chapter-title-rtl, .chapterdate, .chapter-release-date');
-                
-                // Nettoyage du titre (enlève les espaces en trop)
-                let cleanTitle = titleEl.innerText.trim().replace(/\s+/g, ' ');
-                
-                return {
-                    id: a.href,
-                    title: cleanTitle,
-                    date: dateEl ? dateEl.innerText.trim() : ""
-                };
-            }).filter(c => c !== null);
+            // On trie, on enlève les doublons et on nettoie les titres
+            const uniqueLinks = [];
+            const ids = new Set();
+            
+            links.forEach(a => {
+                if (!ids.has(a.href) && a.href.startsWith('http') && !a.href.includes('#')) {
+                    ids.add(a.href);
+                    
+                    const parent = a.closest('li, div, tr') || a.parentElement;
+                    const dateEl = parent.querySelector('.date-chapter-title-rtl, .chapterdate, .chapter-release-date, .time');
+                    
+                    let title = a.innerText.trim() || a.getAttribute('title');
+                    if (!title) {
+                        const h5 = a.querySelector('h5, span, .chapternum');
+                        if (h5) title = h5.innerText.trim();
+                    }
+                    
+                    uniqueLinks.push({
+                        id: a.href,
+                        title: title.replace(/\s+/g, ' ') || 'Chapitre Inconnu',
+                        date: dateEl ? dateEl.innerText.trim() : ""
+                    });
+                }
+            });
+            
+            return uniqueLinks;
         } catch (error) {
+            console.error("Erreur Scan-VF getChapters:", error);
             return [];
         }
+    },
     },
 
     // 4. LECTURE DES PAGES
