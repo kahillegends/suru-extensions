@@ -24,7 +24,7 @@
     "id": "scanvf",
     "name": "Scan-VF",
     "version": "1.0.0",
-    "source_url": "https://raw.githubusercontent.com/TON_PSEUDO_GITHUB/suru-extensions/main/sources/scanvf.js",
+    "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/scanvf.js",
     "icon_url": "https://www.scan-vf.net/favicon.ico"
   }
 ]
