@@ -2,7 +2,6 @@
     name: "Scan-VF",
     baseUrl: "https://www.scan-vf.net",
 
-    // ✅ Ton Rust renvoie exactement "CF_BLOCKED" ou "TIMEOUT", on s'en sert !
     _checkCloudflare: function(html) {
         return html === 'CF_BLOCKED' 
             || html === 'TIMEOUT' 
@@ -13,8 +12,8 @@
     // 1. PAGE POPULAIRE
     getPopular: async function(page, invoke) {
         try {
-            // Scan-VF utilise une page 1-indexée (page 1, page 2...)
-            const url = `${this.baseUrl}/filterList?alpha=&genre=&status=&p=${page + 1}`;
+            // ✅ CORRECTION DU 404 : On tape sur l'accueil ou l'annuaire au lieu de filterList
+            const url = page === 0 ? this.baseUrl : `${this.baseUrl}/manga-list?page=${page}`;
             const html = await invoke('fetch_html', { url: url });
             
             if (this._checkCloudflare(html)) {
@@ -24,16 +23,16 @@
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             
-            // Scan-VF range ses mangas dans des blocs .media
-            const elements = doc.querySelectorAll('.media');
+            // Scan-VF range souvent ses mangas dans des div .media, .manga-box ou des listes
+            const elements = doc.querySelectorAll('.media, .manga-box, .manga-item, .item');
             
             return Array.from(elements).map(el => {
-                const a = el.querySelector('.media-heading a') || el.querySelector('a');
+                const a = el.querySelector('a');
                 const img = el.querySelector('img');
                 
                 return {
                     id: a ? a.href : '',
-                    title: a ? a.innerText.trim() : "Inconnu",
+                    title: a ? a.innerText.trim() || img?.getAttribute('alt') : "Inconnu",
                     cover: img ? (img.getAttribute('data-src') || img.getAttribute('src') || '') : ''
                 };
             }).filter(m => m.id !== '' && m.cover !== '');
@@ -55,10 +54,10 @@
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            const elements = doc.querySelectorAll('.media');
+            const elements = doc.querySelectorAll('.media, .manga-box');
             
             return Array.from(elements).map(el => {
-                const a = el.querySelector('.media-heading a') || el.querySelector('a');
+                const a = el.querySelector('a');
                 const img = el.querySelector('img');
                 
                 return {
@@ -78,14 +77,10 @@
         try {
             const html = await invoke('fetch_html', { url: mangaUrl });
             
-            if (this._checkCloudflare(html)) {
-                throw new Error("Bypass requis");
-            }
+            if (this._checkCloudflare(html)) throw new Error("Bypass requis");
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            
-            // Les chapitres sur Scan-VF sont dans une liste ul.chapters
             const elements = doc.querySelectorAll('.chapters li');
             
             return Array.from(elements).map(li => {
@@ -111,14 +106,10 @@
         try {
             const html = await invoke('fetch_html', { url: chapterUrl });
             
-            if (this._checkCloudflare(html)) {
-                throw new Error("Bypass requis");
-            }
+            if (this._checkCloudflare(html)) throw new Error("Bypass requis");
 
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            
-            // Les images sont souvent dans div#all ou ont la classe .img-responsive
             const images = doc.querySelectorAll('.img-responsive, #all img');
             
             return Array.from(images).map(img => {
