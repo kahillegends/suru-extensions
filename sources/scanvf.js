@@ -10,10 +10,9 @@
             || html.length < 500;
     },
 
-    // 1. PAGE POPULAIRE (Correction du 404)
+    // 1. PAGE POPULAIRE
     getPopular: async function(page, invoke) {
         try {
-            // On attaque directement la liste des mangas, fini la page d'accueil cassée !
             const pageParam = page > 0 ? `?page=${page + 1}` : '';
             const url = `${this.baseUrl}/manga-list${pageParam}`; 
             
@@ -24,7 +23,6 @@
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             
-            // Filet très large pour attraper les mangas peu importe le thème
             const elements = doc.querySelectorAll('.media, .manga-box, .manga-item, .item, .bsx');
             
             return Array.from(elements).map(el => {
@@ -69,7 +67,7 @@
         }
     },
 
-  // 3. CHAPITRES (Aspirateur Universel)
+    // 3. CHAPITRES
     getChapters: async function(mangaUrl, invoke) {
         try {
             const html = await invoke('fetch_html', { url: mangaUrl });
@@ -78,17 +76,14 @@
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             
-            // On cherche tous les blocs où ils pourraient cacher les chapitres
             const listContainers = doc.querySelectorAll('.chapters, #chapterlist, .eplister, .clstyle, .wp-manga-chapter, .list-chapters, .chap-list, .chap-box');
             let links = [];
             
             if (listContainers.length > 0) {
-                // S'il trouve un bloc, il prend tous les liens dedans
                 listContainers.forEach(container => {
                     container.querySelectorAll('a').forEach(a => links.push(a));
                 });
             } else {
-                // S'il ne trouve rien (ils ont encore changé le design), on prend TOUS les liens de la page !
                 doc.querySelectorAll('a').forEach(a => {
                     if (a.href && (a.href.includes('chapitre-') || a.href.includes('chapter-') || a.innerText.toLowerCase().includes('chapitre '))) {
                         links.push(a);
@@ -96,7 +91,6 @@
                 });
             }
 
-            // On trie, on enlève les doublons et on nettoie les titres
             const uniqueLinks = [];
             const ids = new Set();
             
@@ -126,8 +120,7 @@
             console.error("Erreur Scan-VF getChapters:", error);
             return [];
         }
-    },
-    },
+    }, // <-- L'ERREUR ÉTAIT JUSTE EN DESSOUS D'ICI (}, }, au lieu de },)
 
     // 4. LECTURE DES PAGES
     getPages: async function(chapterUrl, invoke) {
@@ -138,7 +131,6 @@
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             
-            // Sélecteurs de lecteur
             const images = doc.querySelectorAll('.img-responsive, #all img, #readerarea img, .reading-content img');
             
             return Array.from(images).map(img => {
