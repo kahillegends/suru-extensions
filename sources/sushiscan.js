@@ -20,28 +20,14 @@ function isCloudflare(html) {
   return false;
 }
 
-// 🟢 Proxy image via FlareSolverr pour les covers bloquées par CF
-async function proxyImageUrl(url, invoke) {
-  try {
-    // On convertit l'URL en data URL via FlareSolverr
-    // Pour l'instant on retourne l'URL directe — les images CF passent souvent
-    // directement une fois que FlareSolverr a établi la session
-    return url;
-  } catch {
-    return url;
-  }
-}
-
 async function getPopular(page = 0, invoke) {
   const url = `${baseUrl}/catalogue/?page=${page + 1}&order=popular`;
   const html = await fetchHTML(url, invoke);
   if (isCloudflare(html)) return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
 
   const doc = parseDOM(html);
-  const items = doc.querySelectorAll('.bsx');
   const results = [];
-
-  items.forEach(el => {
+  doc.querySelectorAll('.bsx').forEach(el => {
     const a = el.querySelector('a');
     const img = el.querySelector('img');
     const title = el.querySelector('.tt') || el.querySelector('a');
@@ -53,7 +39,6 @@ async function getPopular(page = 0, invoke) {
       source_id: 'sushiscan'
     });
   });
-
   return results;
 }
 
@@ -63,10 +48,8 @@ async function search(query, page = 0, invoke) {
   if (isCloudflare(html)) return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
 
   const doc = parseDOM(html);
-  const items = doc.querySelectorAll('.bsx');
   const results = [];
-
-  items.forEach(el => {
+  doc.querySelectorAll('.bsx').forEach(el => {
     const a = el.querySelector('a');
     const img = el.querySelector('img');
     const title = el.querySelector('.tt') || el.querySelector('a');
@@ -78,7 +61,6 @@ async function search(query, page = 0, invoke) {
       source_id: 'sushiscan'
     });
   });
-
   return results;
 }
 
@@ -87,14 +69,52 @@ async function getMangaDetails(mangaId, invoke) {
   if (isCloudflare(html)) return null;
 
   const doc = parseDOM(html);
+
   const title = doc.querySelector('.entry-title')?.textContent?.trim() || '';
-  const cover = doc.querySelector('.thumbook img')?.getAttribute('src') || doc.querySelector('.thumbook img')?.getAttribute('data-src') || '';
-  const synopsis = doc.querySelector('.entry-content p')?.textContent?.trim() || doc.querySelector('[itemprop="description"]')?.textContent?.trim() || '';
+
+  const cover = doc.querySelector('.thumbook img')?.getAttribute('src')
+    || doc.querySelector('.thumbook img')?.getAttribute('data-src')
+    || doc.querySelector('.thumb img')?.getAttribute('src')
+    || '';
+
+  const synopsis = doc.querySelector('.entry-content p')?.textContent?.trim()
+    || doc.querySelector('[itemprop="description"]')?.textContent?.trim()
+    || doc.querySelector('.synops')?.textContent?.trim()
+    || '';
+
+  // 🟢 Sélecteurs auteur corrigés — SushiScan utilise plusieurs formats
+  let author = 'Inconnu';
+  const authorSelectors = [
+    '.fmed b', // format le plus commun
+    '[itemprop="author"]',
+    '.infotable tr:nth-child(2) td:last-child',
+    '.spe span:contains("Auteur") + span',
+    '.tsinfo .imptdt:nth-child(2) i',
+  ];
+  for (const sel of authorSelectors) {
+    try {
+      const el = doc.querySelector(sel);
+      if (el && el.textContent.trim() && el.textContent.trim() !== '-') {
+        author = el.textContent.trim();
+        break;
+      }
+    } catch {}
+  }
+
+  // Statut
+  let status = 'En cours';
+  const statusEl = doc.querySelector('.tsinfo .imptdt:first-child i')
+    || doc.querySelector('.infotable tr:first-child td:last-child');
+  if (statusEl) {
+    const s = statusEl.textContent.trim().toLowerCase();
+    if (s.includes('terminé') || s.includes('completed') || s.includes('fini')) status = 'Terminé';
+    else if (s.includes('pause') || s.includes('hiatus')) status = 'En pause';
+  }
 
   const genres = [];
   doc.querySelectorAll('.mgen a').forEach(el => genres.push(el.textContent.trim()));
 
-  return { id: mangaId, title, cover, synopsis, author: "Inconnu", status: "En cours", genres, source_id: 'sushiscan' };
+  return { id: mangaId, title, cover, synopsis, author, status, genres, source_id: 'sushiscan' };
 }
 
 async function getChapters(mangaId, invoke) {
@@ -102,10 +122,9 @@ async function getChapters(mangaId, invoke) {
   if (isCloudflare(html)) return [];
 
   const doc = parseDOM(html);
-  const chapterEls = doc.querySelectorAll('#chapterlist li');
   const chapters = [];
 
-  chapterEls.forEach(el => {
+  doc.querySelectorAll('#chapterlist li').forEach(el => {
     const a = el.querySelector('a');
     if (!a) return;
     const numEl = el.querySelector('.chapternum');
@@ -126,36 +145,55 @@ async function getPages(chapterId, invoke) {
   if (isCloudflare(html)) return [];
 
   const doc = parseDOM(html);
-  const scripts = doc.querySelectorAll('script');
   let pages = [];
 
+  // Méthode 1 : ts_reader.run (méthode principale SushiScan)
+  const scripts = doc.querySelectorAll('script');
   for (const script of scripts) {
     const content = script.textContent || '';
     if (content.includes('ts_reader.run')) {
       try {
-        const match = content.match(/ts_reader\.run\((\{.*?\})\)/s);
+        const match = content.match(/ts_reader\.run\((\{[\s\S]*?\})\)/);
         if (match) {
           const data = JSON.parse(match[1]);
           const sources = data.sources || [];
           if (sources.length > 0) {
-            const images = sources[0].images || [];
-            pages = images.map(img => img.replace('http://', 'https://'));
+            pages = (sources[0].images || []).map(img => img.replace('http://', 'https://'));
           }
         }
-      } catch (e) { console.error('Erreur parsing ts_reader:', e); }
+      } catch (e) { console.error('ts_reader parse error:', e); }
       break;
     }
   }
 
+  // Méthode 2 : chercher dans le HTML brut si ts_reader a échoué
+  if (pages.length === 0) {
+    try {
+      const match = html.match(/ts_reader\.run\((\{[\s\S]*?\})\)/);
+      if (match) {
+        const data = JSON.parse(match[1]);
+        const sources = data.sources || [];
+        if (sources.length > 0) {
+          pages = (sources[0].images || []).map(img => img.replace('http://', 'https://'));
+        }
+      }
+    } catch(e) {}
+  }
+
+  // Méthode 3 : fallback DOM
   if (pages.length === 0) {
     doc.querySelectorAll('#readerarea img').forEach(img => {
-      const src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || '';
+      const src = img.getAttribute('src')
+        || img.getAttribute('data-src')
+        || img.getAttribute('data-lazy-src')
+        || '';
       if (src && src.startsWith('http') && !src.includes('lazyload')) {
         pages.push(src.replace('http://', 'https://'));
       }
     });
   }
 
+  console.log(`[SushiScan] ${pages.length} pages trouvées pour ${chapterId}`);
   return pages;
 }
 
