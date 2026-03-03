@@ -82,13 +82,11 @@ async function getMangaDetails(mangaId, invoke) {
     || doc.querySelector('.synops')?.textContent?.trim()
     || '';
 
-  // 🟢 Sélecteurs auteur corrigés — SushiScan utilise plusieurs formats
   let author = 'Inconnu';
   const authorSelectors = [
-    '.fmed b', // format le plus commun
+    '.fmed b',
     '[itemprop="author"]',
     '.infotable tr:nth-child(2) td:last-child',
-    '.spe span:contains("Auteur") + span',
     '.tsinfo .imptdt:nth-child(2) i',
   ];
   for (const sel of authorSelectors) {
@@ -101,7 +99,6 @@ async function getMangaDetails(mangaId, invoke) {
     } catch {}
   }
 
-  // Statut
   let status = 'En cours';
   const statusEl = doc.querySelector('.tsinfo .imptdt:first-child i')
     || doc.querySelector('.infotable tr:first-child td:last-child');
@@ -141,7 +138,14 @@ async function getChapters(mangaId, invoke) {
 }
 
 async function getPages(chapterId, invoke) {
-  const html = await fetchHTML(chapterId, invoke);
+  // Étape 1 : warm-up — charge la page via BrowserWindow pour décrocher
+  // les cookies CF de c.sushiscan.net nativement
+  console.log('[SushiScan] Warm-up CDN...');
+  const warmup = await invoke('warmup_cdn', { chapterUrl: chapterId });
+  console.log('[SushiScan] Warm-up résultat:', JSON.stringify(warmup));
+
+  // Étape 2 : fetch_html via FlareSolverr (cookies maintenant en session)
+  const html = await invoke('fetch_html', { url: chapterId });
   if (isCloudflare(html)) return [];
 
   const doc = parseDOM(html);
@@ -172,9 +176,8 @@ async function getPages(chapterId, invoke) {
       const match = html.match(/ts_reader\.run\((\{[\s\S]*?\})\)/);
       if (match) {
         const data = JSON.parse(match[1]);
-        const sources = data.sources || [];
-        if (sources.length > 0) {
-          pages = (sources[0].images || []).map(img => img.replace('http://', 'https://'));
+        if (data.sources?.[0]?.images) {
+          pages = data.sources[0].images.map(img => img.replace('http://', 'https://'));
         }
       }
     } catch(e) {}
