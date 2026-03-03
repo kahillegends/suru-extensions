@@ -12,10 +12,16 @@ function parseDOM(html) {
   return parser.parseFromString(html, 'text/html');
 }
 
-// 🛡️ Fonction de sécurité vitale pour gérer les crashs du robot
+// 🛡️ Détection Cloudflare — uniquement les vrais indicateurs de blocage
 function isCloudflare(html) {
   if (!html || html === 'TIMEOUT' || html.startsWith('ERROR:')) return true;
-  return html === 'CF_BLOCKED' || html.includes('just a moment') || html.includes('cloudflare');
+  if (html === 'CF_BLOCKED') return true;
+  // Vrais indicateurs de page CF bloquante
+  if (html.includes('just a moment') && html.includes('checking your browser')) return true;
+  if (html.includes('cf-browser-verification')) return true;
+  if (html.includes('challenge-running')) return true;
+  if (html.includes('_cf_chl_opt')) return true;
+  return false;
 }
 
 // --- LISTE POPULAIRE ---
@@ -37,7 +43,7 @@ async function getPopular(page = 0, invoke) {
     if (!a) return;
 
     results.push({
-      id: a.getAttribute('href') || '', // L'ID est l'URL complète !
+      id: a.getAttribute('href') || '',
       title: (title?.textContent || '').trim(),
       cover: img?.getAttribute('src') || img?.getAttribute('data-src') || '',
       source_id: 'sushiscan'
@@ -66,7 +72,7 @@ async function search(query, page = 0, invoke) {
     if (!a) return;
 
     results.push({
-      id: a.getAttribute('href') || '', // L'ID est l'URL complète !
+      id: a.getAttribute('href') || '',
       title: (title?.textContent || '').trim(),
       cover: img?.getAttribute('src') || img?.getAttribute('data-src') || '',
       source_id: 'sushiscan'
@@ -78,7 +84,6 @@ async function search(query, page = 0, invoke) {
 
 // --- DETAILS MANGA ---
 async function getMangaDetails(mangaId, invoke) {
-  // mangaId est déjà l'URL complète grâce à la modification ci-dessus
   const html = await fetchHTML(mangaId, invoke);
   if (isCloudflare(html)) return null;
 
@@ -98,7 +103,6 @@ async function getMangaDetails(mangaId, invoke) {
 
 // --- CHAPITRES ---
 async function getChapters(mangaId, invoke) {
-  // mangaId est déjà l'URL complète
   const html = await fetchHTML(mangaId, invoke);
   if (isCloudflare(html)) return [];
 
@@ -114,7 +118,7 @@ async function getChapters(mangaId, invoke) {
     const dateEl = el.querySelector('.chapterdate');
 
     chapters.push({
-      id: a.getAttribute('href') || '', // L'ID devient l'URL directe du chapitre
+      id: a.getAttribute('href') || '',
       title: (numEl?.textContent || a.textContent || '').trim(),
       number: (numEl?.textContent || '').trim(),
       date: (dateEl?.textContent || '').trim()
@@ -126,7 +130,6 @@ async function getChapters(mangaId, invoke) {
 
 // --- PAGES D'UN CHAPITRE ---
 async function getPages(chapterId, invoke) {
-  // chapterId est directement l'URL du chapitre, plus besoin de construire un lien !
   const html = await fetchHTML(chapterId, invoke);
   if (isCloudflare(html)) return [];
 
@@ -155,7 +158,7 @@ async function getPages(chapterId, invoke) {
     }
   }
 
-  // Fallback DOM (Avec support des lazy-load)
+  // Fallback DOM
   if (pages.length === 0) {
     doc.querySelectorAll('#readerarea img').forEach(img => {
       const src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || '';
