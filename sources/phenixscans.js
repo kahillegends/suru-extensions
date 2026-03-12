@@ -1,6 +1,6 @@
 // Extension Phénix Scans pour SORU
 // Site avec contenu chargé dynamiquement en JS — nécessite rendu navigateur
-const baseUrl = 'https://phenix-scans.co';
+var baseUrl = 'https://phenix-scans.co';
 
 function parseDOM(html) {
   return new DOMParser().parseFromString(html, 'text/html');
@@ -221,7 +221,7 @@ async function getPages(chapterId, invoke) {
   getPages
 });
 // Site basé sur WordPress + thème Madara (même moteur que SushiScan)
-const baseUrl = 'https://phenix-scans.co';
+var baseUrl = 'https://phenix-scans.co';
 
 function parseDOM(html) {
   return new DOMParser().parseFromString(html, 'text/html');
