@@ -1,13 +1,12 @@
 // Extension SushiScan pour SORU
-const baseUrl = 'https://sushiscan.net';
+var baseUrl = 'https://sushiscan.net';
 
-async function fetchHTML(url, invoke) {
-  return await invoke('fetch_html', { url });
+function fetchHTML(url, invoke) {
+  return invoke('fetch_html', { url });
 }
 
 function parseDOM(html) {
-  const parser = new DOMParser();
-  return parser.parseFromString(html, 'text/html');
+  return new DOMParser().parseFromString(html, 'text/html');
 }
 
 function isCloudflare(html) {
@@ -20,44 +19,44 @@ function isCloudflare(html) {
   return false;
 }
 
-async function getPopular(page = 0, invoke) {
-  const url = `${baseUrl}/catalogue/?page=${page + 1}&order=popular`;
-  const html = await fetchHTML(url, invoke);
+async function getPopular(page, invoke) {
+  page = page || 0;
+  var url = baseUrl + '/catalogue/?page=' + (page + 1) + '&order=popular';
+  var html = await fetchHTML(url, invoke);
   if (isCloudflare(html)) return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
-
-  const doc = parseDOM(html);
-  const results = [];
-  doc.querySelectorAll('.bsx').forEach(el => {
-    const a = el.querySelector('a');
-    const img = el.querySelector('img');
-    const title = el.querySelector('.tt') || el.querySelector('a');
+  var doc = parseDOM(html);
+  var results = [];
+  doc.querySelectorAll('.bsx').forEach(function(el) {
+    var a = el.querySelector('a');
+    var img = el.querySelector('img');
+    var title = el.querySelector('.tt') || a;
     if (!a) return;
     results.push({
       id: a.getAttribute('href') || '',
-      title: (title?.textContent || '').trim(),
-      cover: img?.getAttribute('src') || img?.getAttribute('data-src') || '',
+      title: (title ? title.textContent : '').trim(),
+      cover: (img ? (img.getAttribute('src') || img.getAttribute('data-src')) : '') || '',
       source_id: 'sushiscan'
     });
   });
   return results;
 }
 
-async function search(query, page = 0, invoke) {
-  const url = `${baseUrl}/page/${page + 1}/?s=${encodeURIComponent(query)}`;
-  const html = await fetchHTML(url, invoke);
+async function search(query, page, invoke) {
+  page = page || 0;
+  var url = baseUrl + '/page/' + (page + 1) + '/?s=' + encodeURIComponent(query);
+  var html = await fetchHTML(url, invoke);
   if (isCloudflare(html)) return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
-
-  const doc = parseDOM(html);
-  const results = [];
-  doc.querySelectorAll('.bsx').forEach(el => {
-    const a = el.querySelector('a');
-    const img = el.querySelector('img');
-    const title = el.querySelector('.tt') || el.querySelector('a');
+  var doc = parseDOM(html);
+  var results = [];
+  doc.querySelectorAll('.bsx').forEach(function(el) {
+    var a = el.querySelector('a');
+    var img = el.querySelector('img');
+    var title = el.querySelector('.tt') || a;
     if (!a) return;
     results.push({
       id: a.getAttribute('href') || '',
-      title: (title?.textContent || '').trim(),
-      cover: img?.getAttribute('src') || img?.getAttribute('data-src') || '',
+      title: (title ? title.textContent : '').trim(),
+      cover: (img ? (img.getAttribute('src') || img.getAttribute('data-src')) : '') || '',
       source_id: 'sushiscan'
     });
   });
@@ -65,152 +64,116 @@ async function search(query, page = 0, invoke) {
 }
 
 async function getMangaDetails(mangaId, invoke) {
-  const html = await fetchHTML(mangaId, invoke);
+  var html = await fetchHTML(mangaId, invoke);
   if (isCloudflare(html)) return null;
+  var doc = parseDOM(html);
 
-  const doc = parseDOM(html);
+  var titleEl = doc.querySelector('.entry-title');
+  var title = titleEl ? titleEl.textContent.trim() : '';
 
-  const title = doc.querySelector('.entry-title')?.textContent?.trim() || '';
+  var coverEl = doc.querySelector('.thumbook img') || doc.querySelector('.thumb img');
+  var cover = coverEl ? (coverEl.getAttribute('src') || coverEl.getAttribute('data-src') || '') : '';
 
-  const cover = doc.querySelector('.thumbook img')?.getAttribute('src')
-    || doc.querySelector('.thumbook img')?.getAttribute('data-src')
-    || doc.querySelector('.thumb img')?.getAttribute('src')
-    || '';
+  var synopsisEl = doc.querySelector('.entry-content p') || doc.querySelector('[itemprop="description"]') || doc.querySelector('.synops');
+  var synopsis = synopsisEl ? synopsisEl.textContent.trim() : '';
 
-  const synopsis = doc.querySelector('.entry-content p')?.textContent?.trim()
-    || doc.querySelector('[itemprop="description"]')?.textContent?.trim()
-    || doc.querySelector('.synops')?.textContent?.trim()
-    || '';
-
-  let author = 'Inconnu';
-  const authorSelectors = [
-    '.fmed b',
-    '[itemprop="author"]',
-    '.infotable tr:nth-child(2) td:last-child',
-    '.tsinfo .imptdt:nth-child(2) i',
-  ];
-  for (const sel of authorSelectors) {
+  var author = 'Inconnu';
+  var authorSelectors = ['.fmed b', '[itemprop="author"]', '.infotable tr:nth-child(2) td:last-child', '.tsinfo .imptdt:nth-child(2) i'];
+  for (var i = 0; i < authorSelectors.length; i++) {
     try {
-      const el = doc.querySelector(sel);
-      if (el && el.textContent.trim() && el.textContent.trim() !== '-') {
-        author = el.textContent.trim();
-        break;
-      }
-    } catch {}
+      var el = doc.querySelector(authorSelectors[i]);
+      if (el && el.textContent.trim() && el.textContent.trim() !== '-') { author = el.textContent.trim(); break; }
+    } catch(e) {}
   }
 
-  let status = 'En cours';
-  const statusEl = doc.querySelector('.tsinfo .imptdt:first-child i')
-    || doc.querySelector('.infotable tr:first-child td:last-child');
+  var status = 'En cours';
+  var statusEl = doc.querySelector('.tsinfo .imptdt:first-child i') || doc.querySelector('.infotable tr:first-child td:last-child');
   if (statusEl) {
-    const s = statusEl.textContent.trim().toLowerCase();
+    var s = statusEl.textContent.trim().toLowerCase();
     if (s.includes('terminé') || s.includes('completed') || s.includes('fini')) status = 'Terminé';
     else if (s.includes('pause') || s.includes('hiatus')) status = 'En pause';
   }
 
-  const genres = [];
-  doc.querySelectorAll('.mgen a').forEach(el => genres.push(el.textContent.trim()));
+  var genres = [];
+  doc.querySelectorAll('.mgen a').forEach(function(el) { genres.push(el.textContent.trim()); });
 
-  return { id: mangaId, title, cover, synopsis, author, status, genres, source_id: 'sushiscan' };
+  return { id: mangaId, title: title, cover: cover, synopsis: synopsis, author: author, status: status, genres: genres, source_id: 'sushiscan' };
 }
 
 async function getChapters(mangaId, invoke) {
-  const html = await fetchHTML(mangaId, invoke);
+  var html = await fetchHTML(mangaId, invoke);
   if (isCloudflare(html)) return [];
-
-  const doc = parseDOM(html);
-  const chapters = [];
-
-  doc.querySelectorAll('#chapterlist li').forEach(el => {
-    const a = el.querySelector('a');
+  var doc = parseDOM(html);
+  var chapters = [];
+  doc.querySelectorAll('#chapterlist li').forEach(function(el) {
+    var a = el.querySelector('a');
     if (!a) return;
-    const numEl = el.querySelector('.chapternum');
-    const dateEl = el.querySelector('.chapterdate');
+    var numEl = el.querySelector('.chapternum');
+    var dateEl = el.querySelector('.chapterdate');
     chapters.push({
       id: a.getAttribute('href') || '',
-      title: (numEl?.textContent || a.textContent || '').trim(),
-      number: (numEl?.textContent || '').trim(),
-      date: (dateEl?.textContent || '').trim()
+      title: (numEl ? numEl.textContent : a.textContent).trim(),
+      number: numEl ? numEl.textContent.trim() : '',
+      date: dateEl ? dateEl.textContent.trim() : ''
     });
   });
-
   return chapters;
 }
 
 async function getPages(chapterId, invoke) {
-  // Warm-up : FlareSolverr fetch le CDN pour obtenir le cf_clearance
-  // puis les cookies sont injectés dans la session Electron
-  console.log('[SushiScan] Warm-up CDN...');
-  await invoke('warmup_page', {
-    pageUrl: chapterId,
-    cdnUrl: 'https://c.sushiscan.net/'
-  });
-  console.log('[SushiScan] Warm-up terminé, récupération du HTML...');
+  await invoke('warmup_page', { pageUrl: chapterId, cdnUrl: 'https://c.sushiscan.net/' });
+  var html = await invoke('fetch_html', { url: chapterId });
+  if (isCloudflare(html)) return [];
 
-  // Récupérer le HTML via FlareSolverr pour parser les URLs d'images
-  const html = await invoke('fetch_html', { url: chapterId });
-  if (isCloudflare(html)) {
-    console.log('[SushiScan] HTML encore bloqué par CF');
-    return [];
-  }
+  var doc = parseDOM(html);
+  var pages = [];
 
-  const doc = parseDOM(html);
-  let pages = [];
-
-  // Méthode 1 : ts_reader.run (méthode principale SushiScan)
-  const scripts = doc.querySelectorAll('script');
-  for (const script of scripts) {
-    const content = script.textContent || '';
+  var scripts = doc.querySelectorAll('script');
+  for (var i = 0; i < scripts.length; i++) {
+    var content = scripts[i].textContent || '';
     if (content.includes('ts_reader.run')) {
       try {
-        const match = content.match(/ts_reader\.run\((\{[\s\S]*?\})\)/);
+        var match = content.match(/ts_reader\.run\((\{[\s\S]*?\})\)/);
         if (match) {
-          const data = JSON.parse(match[1]);
-          const sources = data.sources || [];
-          if (sources.length > 0) {
-            pages = (sources[0].images || []).map(img => img.replace('http://', 'https://'));
+          var data = JSON.parse(match[1]);
+          if (data.sources && data.sources[0] && data.sources[0].images) {
+            pages = data.sources[0].images.map(function(img) { return img.replace('http://', 'https://'); });
           }
         }
-      } catch (e) { console.error('ts_reader parse error:', e); }
+      } catch(e) {}
       break;
     }
   }
 
-  // Méthode 2 : chercher dans le HTML brut si ts_reader a échoué
   if (pages.length === 0) {
     try {
-      const match = html.match(/ts_reader\.run\((\{[\s\S]*?\})\)/);
-      if (match) {
-        const data = JSON.parse(match[1]);
-        if (data.sources?.[0]?.images) {
-          pages = data.sources[0].images.map(img => img.replace('http://', 'https://'));
+      var m = html.match(/ts_reader\.run\((\{[\s\S]*?\})\)/);
+      if (m) {
+        var d = JSON.parse(m[1]);
+        if (d.sources && d.sources[0] && d.sources[0].images) {
+          pages = d.sources[0].images.map(function(img) { return img.replace('http://', 'https://'); });
         }
       }
     } catch(e) {}
   }
 
-  // Méthode 3 : fallback DOM
   if (pages.length === 0) {
-    doc.querySelectorAll('#readerarea img').forEach(img => {
-      const src = img.getAttribute('src')
-        || img.getAttribute('data-src')
-        || img.getAttribute('data-lazy-src')
-        || '';
+    doc.querySelectorAll('#readerarea img').forEach(function(img) {
+      var src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || '';
       if (src && src.startsWith('http') && !src.includes('lazyload')) {
         pages.push(src.replace('http://', 'https://'));
       }
     });
   }
 
-  console.log(`[SushiScan] ${pages.length} pages trouvées pour ${chapterId}`);
   return pages;
 }
 
 ({
-  baseUrl,
-  getPopular,
-  search,
-  getMangaDetails,
-  getChapters,
-  getPages
+  baseUrl: baseUrl,
+  getPopular: getPopular,
+  search: search,
+  getMangaDetails: getMangaDetails,
+  getChapters: getChapters,
+  getPages: getPages
 });
