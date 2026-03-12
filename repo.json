@@ -25,6 +25,13 @@
     "name": "Scan-VF",
     "version": "1.0.0",
     "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/scanvf.js",
-    "icon_url": "https://www.scan-vf.net/favicon.ico"
+    "icon_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAMAAABF0y+mAAABNVBMVEVHcEyjVk27Y1h6R0FJKicqLy/beW4AAADNpqEbJCUQEBAnLS0uFxQoLzAyMjLJm5WQTkdcLyrju7aZZF8SEhLOaV6+Z12ZTkaWRz7LaF03ODkZMjS/gHkZGBiVTEQ5OTkcLi/kurWIZ2TYbmG3fHadUEjXbWHEk43uoprOaF3ueWzwemz+0Mr/0sz+gnQ+Pz/WbWH5zMY3OTrodmm5YljCZFn/1tDTrajOaFwABQYdIiOxWU7xe23ecmUPGBh4S0b4gHJMPz7wxL7AnZhyW1nEhH3pvbeWSD/mgndvOzWign/sl46lpaWsjIivc2yaWFHropritrH8o5kgNzlXRUTkjIIDKi1YLCbQdWvSkIjkfXGlZmBjZGVENjV3e3uGYV22lI/8l4yWdXL9rKOTmJi/w8SGior/X5ZcAAAALHRSTlMAsfliI/ybBfhdP28W4tP4+HKSSdzJy8yG47S2YZeVq4jWk7rn1NXHYnK4suBI4J8AAAH4SURBVCiRbZLnctswEISpUaPqKO4tvScECRIECfZOUb1YxWquSd7/EUJb1Yl3Bn/wzeIWd0dRW11kfv7IfE9Rz5Q7KxQpKoNwx7IqovElRWVzbwsrmOIs5/y0c3kpDAbCaGSRc8cS8mtrqUNiVMNIw0jH3KhCtPTm3TOHOI7IsjrLsjZrW2kyKG+rlgUH6qwtsrat2whZ6VJ2C78JU2SzVwaJjTobRenMTt6v9Uav32832pO7Yfeu0ah/2rLCoh+F0cN9N2h1o+5D1B8ucmvGcWpNtA1WFqf3V+x0YutjVSgt2TuBE5RZILY9Wmu3ZjPaFhWOE5beo0DgzBvAezIAgL8NmW7V5Lhgmemo4XCmLw0UhWdAfa54YVXl/GHiCX7wY2en9ef6l8uAVnM+n8ROwU8+wexjTQ00fzdjp9xs8oEW11z1L1ssm2MiA5kHIQN6Ia8hU61t/vkRxu0BLsPzfHwCjKAoFtcQQoSqtMTwvdgqtyHRkfFqA7EBcU2WAMMA6VYzsIHIBh6KBBu4dhNKDG1VEYGQaJttyZ5ijKFe9ev1MdQRhFhL7oxl/+Q48fmEpr1EonJ4/Ca5M861ZMBc/H+7VF5RlYOXUXbPbV378vv9F9ge77qSDNweoPP/oJTpxT1gAMMDsFBfP4cHqhKneRTwFFVdLclf+pNpLZlj24kAAAAASUVORK5CYII="
+  },
+  {
+    "id": "phenixscans",
+    "name": "Phénix Scans",
+    "version": "1.0.0",
+    "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/phenixscans.js",
+    "icon_url": "https://phenix-scans.co/_nuxt/logo.vYdOKoai.png"
   }
 ]
