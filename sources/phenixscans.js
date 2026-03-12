@@ -23,8 +23,19 @@ async function getPopular(page = 0, invoke) {
   const doc = parseDOM(html);
   const results = [];
 
+  // Debug : afficher les classes des premiers éléments pour identifier la structure
+  console.log('[PhenixScans] Title:', doc.title)
+  console.log('[PhenixScans] HTML length:', html.length)
+  const allLinks = doc.querySelectorAll('a[href*="phenix-scans.co/manga/"]')
+  console.log('[PhenixScans] Liens manga trouvés:', allLinks.length)
+  if (allLinks.length > 0) {
+    const parent = allLinks[0].closest('div, li, article')
+    console.log('[PhenixScans] Parent classe:', parent?.className)
+  }
+
   // Sélecteurs Madara standard
   const items = doc.querySelectorAll('.page-item-detail, .manga-item, .bsx, .c-image-hover');
+  console.log('[PhenixScans] Items trouvés:', items.length)
   items.forEach(el => {
     const a = el.querySelector('a[href]');
     const img = el.querySelector('img');
