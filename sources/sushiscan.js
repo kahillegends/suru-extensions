@@ -138,15 +138,25 @@ async function getChapters(mangaId, invoke) {
 }
 
 async function getPages(chapterId, invoke) {
-  // Étape 1 : warm-up — charge la page via BrowserWindow pour décrocher
-  // les cookies CF de c.sushiscan.net nativement
-  console.log('[SushiScan] Warm-up CDN...');
-  const warmup = await invoke('warmup_cdn', { chapterUrl: chapterId });
-  console.log('[SushiScan] Warm-up résultat:', JSON.stringify(warmup));
+  // =============================================================
+  // ÉTAPE 1 : Warm-up — on charge la vraie page du chapitre dans
+  // un BrowserWindow invisible avec la session partagée Electron.
+  //
+  // Le navigateur va charger le HTML + déclencher nativement les
+  // requêtes vers c.sushiscan.net. CF voit un vrai browser →
+  // valide → stocke cf_clearance dans la session partagée.
+  // Après ça, net.request peut fetch les images sans 403.
+  // =============================================================
+  console.log('[SushiScan] Warm-up page chapitre:', chapterId);
+  await invoke('warmup_page', { pageUrl: chapterId });
+  console.log('[SushiScan] Warm-up terminé, récupération du HTML...');
 
-  // Étape 2 : fetch_html via FlareSolverr (cookies maintenant en session)
+  // ÉTAPE 2 : Récupérer le HTML via FlareSolverr pour parser les URLs d'images
   const html = await invoke('fetch_html', { url: chapterId });
-  if (isCloudflare(html)) return [];
+  if (isCloudflare(html)) {
+    console.log('[SushiScan] HTML encore bloqué par CF');
+    return [];
+  }
 
   const doc = parseDOM(html);
   let pages = [];
