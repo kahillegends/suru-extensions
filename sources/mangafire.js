@@ -100,89 +100,37 @@ async function getMangaDetails(mangaId, invoke) {
 }
 
 // 4. CHAPITRES
-// On utilise l'API /ajax/read/[MANGA_SLUG] pour récupérer les vrais IDs internes
 async function getChapters(mangaId, invoke) {
-  // Extraire le slug du manga depuis l'URL
-  // ex: https://mangafire.to/manga/one-piecee.dkw → one-piecee.dkw
-  var slugMatch = mangaId.match(/\/manga\/([^/?#]+)/);
-  if (!slugMatch) return [];
+  var html = await invoke('fetch_html_rendered', { url: mangaId, waitMs: 5000 });
+  if (html === 'TIMEOUT' || html === 'CF_BLOCKED') return [];
 
-  var slug = slugMatch[1];
-  var apiUrl = baseUrl + '/ajax/read/' + slug;
-
-  var json = await invoke('fetch_json', {
-    url: apiUrl,
-    headers: {
-      'X-Requested-With': 'XMLHttpRequest',
-      'Accept': 'application/json, text/javascript, */*; q=0.01',
-      'Referer': mangaId
-    }
-  });
-
-  if (!json || !json.result || !json.result.html) return [];
-
-  // Le résultat contient du HTML avec les chapitres
-  var doc = parseDOM(json.result.html);
+  var doc = parseDOM(html);
   var chapters = [];
 
-  doc.querySelectorAll('li a, li[data-id]').forEach(function(el) {
-    var a = el.tagName === 'A' ? el : el.querySelector('a');
-    if (!a) return;
+  // Sélecteurs larges pour couvrir toutes les structures MangaFire
+  var links = doc.querySelectorAll(
+    '.list-body ul li a, .scroll-sm ul li a, .chapter-list li a, ' +
+    '[class*="chapter"] li a, .manga-detail ul li a'
+  );
 
-    var href = a.getAttribute('href') || '';
+  links.forEach(function(a) {
+    var href = a.getAttribute('href');
+    if (!href) return;
+    // Garder uniquement les liens qui ressemblent à un chapitre
+    if (!href.includes('/read/')) return;
+
     var fullHref = href.startsWith('http') ? href : baseUrl + href;
-
-    // Récupérer le vrai ID interne depuis data-id sur le <li> ou le <a>
-    var li = el.tagName === 'LI' ? el : el.closest('li');
-    var realId = (li && li.getAttribute('data-id')) || a.getAttribute('data-id') || null;
-
-    // Si pas de data-id, essayer d'extraire depuis href
-    if (!realId) {
-      var idFromHref = href.match(/chapter-(\d+)/);
-      realId = idFromHref ? idFromHref[1] : null;
-    }
-
-    var titleText = a.textContent.trim().replace(/\s+/g, ' ');
-    var numMatch = titleText.match(/chapter\s*(\d+(\.\d+)?)/i);
+    var titleText = (a.textContent || '').trim().replace(/\s+/g, ' ');
+    var numMatch = titleText.match(/chapter[\s-]*(\d+(\.\d+)?)/i);
     var num = numMatch ? numMatch[1] : (chapters.length + 1).toString();
 
-    if (realId && href) {
-      chapters.push({
-        id: realId,
-        href: fullHref,
-        title: titleText || 'Chapitre ' + num,
-        number: num,
-        date: ''
-      });
-    }
-  });
-
-  // Fallback sur le HTML rendu si l'API n'a rien donné
-  if (chapters.length === 0) {
-    var html = await invoke('fetch_html_rendered', { url: mangaId, waitMs: 4000 });
-    if (html === 'TIMEOUT' || html === 'CF_BLOCKED') return [];
-
-    var docFallback = parseDOM(html);
-    docFallback.querySelectorAll('.list-body ul li a, .scroll-sm ul li a, .chapter-list li a').forEach(function(a) {
-      var href = a.getAttribute('href');
-      if (!href) return;
-      var fullHref = href.startsWith('http') ? href : baseUrl + href;
-      var titleText = a.textContent.trim().replace(/\s+/g, ' ');
-      var numMatch = titleText.match(/chapter\s*(\d+(\.\d+)?)/i);
-      var num = numMatch ? numMatch[1] : (chapters.length + 1).toString();
-
-      var li = a.closest('li');
-      var realId = (li && li.getAttribute('data-id')) || a.getAttribute('data-id') || null;
-
-      chapters.push({
-        id: realId || fullHref,
-        href: fullHref,
-        title: titleText || 'Chapitre ' + num,
-        number: num,
-        date: ''
-      });
+    chapters.push({
+      id: fullHref,   // L'URL complète sert d'ID pour fetch_chapter_pages
+      title: titleText || 'Chapitre ' + num,
+      number: num,
+      date: ''
     });
-  }
+  });
 
   chapters.reverse();
 
