@@ -100,45 +100,87 @@ async function getMangaDetails(mangaId, invoke) {
 }
 
 // 4. CHAPITRES
+// On utilise l'API /ajax/read/[MANGA_SLUG] pour récupérer les vrais IDs internes
 async function getChapters(mangaId, invoke) {
-  var html = await invoke('fetch_html_rendered', { url: mangaId, waitMs: 4000 });
-  if (html === 'TIMEOUT' || html === 'CF_BLOCKED') return [];
+  // Extraire le slug du manga depuis l'URL
+  // ex: https://mangafire.to/manga/one-piecee.dkw → one-piecee.dkw
+  var slugMatch = mangaId.match(/\/manga\/([^/?#]+)/);
+  if (!slugMatch) return [];
 
-  var doc = parseDOM(html);
-  var chapters = [];
+  var slug = slugMatch[1];
+  var apiUrl = baseUrl + '/ajax/read/' + slug;
 
-  var items = doc.querySelectorAll('.list-body ul li a, .manga-detail ul li a, .scroll-sm ul li a');
-  
-  items.forEach(function(a) {
-    var href = a.getAttribute('href');
-    if (!href) return;
-    
-    var fullHref = href.startsWith('http') ? href : baseUrl + href;
-    var titleEl = a.querySelector('span') || a;
-    var titleText = titleEl.textContent.trim().replace(/\s+/g, ' ');
-
-    var numMatch = titleText.match(/chapter\s*(\d+(\.\d+)?)/i) || titleText.match(/ch\.\s*(\d+(\.\d+)?)/i);
-    var num = numMatch ? numMatch[1] : (chapters.length + 1).toString();
-
-    chapters.push({
-      id: fullHref,
-      title: titleText || 'Chapitre ' + num,
-      number: num,
-      date: ''
-    });
+  var json = await invoke('fetch_json', {
+    url: apiUrl,
+    headers: {
+      'X-Requested-With': 'XMLHttpRequest',
+      'Accept': 'application/json, text/javascript, */*; q=0.01',
+      'Referer': mangaId
+    }
   });
 
+  if (!json || !json.result || !json.result.html) return [];
+
+  // Le résultat contient du HTML avec les chapitres
+  var doc = parseDOM(json.result.html);
+  var chapters = [];
+
+  doc.querySelectorAll('li a, li[data-id]').forEach(function(el) {
+    var a = el.tagName === 'A' ? el : el.querySelector('a');
+    if (!a) return;
+
+    var href = a.getAttribute('href') || '';
+    var fullHref = href.startsWith('http') ? href : baseUrl + href;
+
+    // Récupérer le vrai ID interne depuis data-id sur le <li> ou le <a>
+    var li = el.tagName === 'LI' ? el : el.closest('li');
+    var realId = (li && li.getAttribute('data-id')) || a.getAttribute('data-id') || null;
+
+    // Si pas de data-id, essayer d'extraire depuis href
+    if (!realId) {
+      var idFromHref = href.match(/chapter-(\d+)/);
+      realId = idFromHref ? idFromHref[1] : null;
+    }
+
+    var titleText = a.textContent.trim().replace(/\s+/g, ' ');
+    var numMatch = titleText.match(/chapter\s*(\d+(\.\d+)?)/i);
+    var num = numMatch ? numMatch[1] : (chapters.length + 1).toString();
+
+    if (realId && href) {
+      chapters.push({
+        id: realId,
+        href: fullHref,
+        title: titleText || 'Chapitre ' + num,
+        number: num,
+        date: ''
+      });
+    }
+  });
+
+  // Fallback sur le HTML rendu si l'API n'a rien donné
   if (chapters.length === 0) {
-    doc.querySelectorAll('.chapter-list li a, .episodes li a').forEach(function(a) {
+    var html = await invoke('fetch_html_rendered', { url: mangaId, waitMs: 4000 });
+    if (html === 'TIMEOUT' || html === 'CF_BLOCKED') return [];
+
+    var docFallback = parseDOM(html);
+    docFallback.querySelectorAll('.list-body ul li a, .scroll-sm ul li a, .chapter-list li a').forEach(function(a) {
       var href = a.getAttribute('href');
-      if (href) {
-        chapters.push({
-          id: href.startsWith('http') ? href : baseUrl + href,
-          title: a.textContent.trim(),
-          number: chapters.length + 1,
-          date: ''
-        });
-      }
+      if (!href) return;
+      var fullHref = href.startsWith('http') ? href : baseUrl + href;
+      var titleText = a.textContent.trim().replace(/\s+/g, ' ');
+      var numMatch = titleText.match(/chapter\s*(\d+(\.\d+)?)/i);
+      var num = numMatch ? numMatch[1] : (chapters.length + 1).toString();
+
+      var li = a.closest('li');
+      var realId = (li && li.getAttribute('data-id')) || a.getAttribute('data-id') || null;
+
+      chapters.push({
+        id: realId || fullHref,
+        href: fullHref,
+        title: titleText || 'Chapitre ' + num,
+        number: num,
+        date: ''
+      });
     });
   }
 
@@ -157,31 +199,22 @@ async function getChapters(mangaId, invoke) {
 }
 
 // 5. PAGES DU CHAPITRE
+// On laisse MangaFire calculer son vrf lui-même dans un BrowserWindow,
+// et on intercepte les URLs des images qui transitent sur le réseau.
 async function getPages(chapterId, invoke) {
-  // Extraire l'ID numérique du chapitre depuis l'URL
-  // ex: https://mangafire.to/read/manga-name.abc/en/chapter-1
-  var chapterNumMatch = chapterId.match(/chapter-([^/?#]+)/);
-  if (!chapterNumMatch) return [];
+  // chapterId est l'URL complète du chapitre
+  // ex: https://mangafire.to/read/one-piecee.dkw/en/chapter-1176
+  var chapterUrl = String(chapterId);
+  if (!chapterUrl.startsWith('http')) {
+    chapterUrl = baseUrl + chapterUrl;
+  }
 
-  var chapterNum = chapterNumMatch[1];
-  var apiUrl = baseUrl + '/ajax/read/chapter/' + chapterNum;
-
-  var json = await invoke('fetch_json', {
-    url: apiUrl,
-    headers: {
-      'X-Requested-With': 'XMLHttpRequest',
-      'Accept': 'application/json, text/javascript, */*; q=0.01'
-    }
+  var pages = await invoke('fetch_chapter_pages', {
+    url: chapterUrl,
+    waitMs: 12000
   });
 
-  if (!json || !json.result || !json.result.images) return [];
-
-  // Chaque entrée est un array [url, 1, 0]
-  return json.result.images.map(function(entry) {
-    return entry[0];
-  }).filter(function(url) {
-    return url && url.startsWith('http');
-  });
+  return pages || [];
 }
 
 ({
