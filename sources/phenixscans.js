@@ -25,59 +25,23 @@ function extractNextData(html) {
 
 async function getPopular(page, invoke) {
   page = page || 0;
-  var url = baseUrl + '/manga?page=' + (page + 1) + '&orderBy=views';
-  var html = await invoke('fetch_html', { url: url });
-  if (isCloudflare(html)) return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
-
-  var results = [];
-
-  // Méthode 1 : __NEXT_DATA__ (Next.js SSR)
-  var nextData = extractNextData(html);
-  if (nextData) {
-    try {
-      // Chercher les mangas dans le pageProps
-      var props = nextData.props && nextData.props.pageProps;
-      var mangas = props && (props.mangas || props.data || props.items || props.comics);
-      if (mangas && Array.isArray(mangas)) {
-        mangas.forEach(function(m) {
-          var slug = m.slug || m.id || '';
-          results.push({
-            id: baseUrl + '/manga/' + slug,
-            title: m.title || m.name || '',
-            cover: (m.coverImage ? 'https://api.phenix-scans.co/' + m.coverImage : (m.cover || m.thumbnail || m.image || '')),
-            source_id: 'phenixscans'
-          });
-        });
-      }
-    } catch(e) {}
-  }
-
-  // Méthode 2 : scraping DOM si __NEXT_DATA__ n'a pas les données
-  if (results.length === 0) {
-    var doc = parseDOM(html);
-    var seen = new Set();
-    doc.querySelectorAll('a[href*="/manga/"]').forEach(function(a) {
-      var href = a.getAttribute('href') || '';
-      if (!href.match(/\/manga\/[^/]+$/) && !href.match(/\/manga\/[^/]+-\d+$/)) return;
-      var fullHref = href.startsWith('http') ? href : baseUrl + href;
-      if (seen.has(fullHref)) return;
-      seen.add(fullHref);
-      var container = a.closest('article, li, div[class*="card"], div[class*="manga"], div[class*="item"]');
-      if (!container) container = a;
-      var img = container.querySelector('img');
-      var titleEl = container.querySelector('h2, h3, h4, p[class*="title"], span[class*="title"]') || a;
-      var title = titleEl ? titleEl.textContent.trim() : '';
-      if (!title || title.length < 2) return;
-      results.push({
-        id: fullHref,
-        title: title,
-        cover: img ? (img.getAttribute('src') || img.getAttribute('data-src') || '') : '',
-        source_id: 'phenixscans'
+  // API directe: /api/front/manga?page=N&orderBy=views
+  var apiEndpoint = apiUrl + '/manga?page=' + (page + 1) + '&orderBy=views';
+  try {
+    var res = await invoke('fetch_html', { url: apiEndpoint });
+    var data = JSON.parse(res);
+    if (data.mangas && Array.isArray(data.mangas)) {
+      return data.mangas.map(function(m) {
+        return {
+          id: baseUrl + '/manga/' + m.slug,
+          title: m.title || m.name || '',
+          cover: m.coverImage ? 'https://api.phenix-scans.co/' + m.coverImage : '',
+          source_id: 'phenixscans'
+        };
       });
-    });
-  }
-
-  return results;
+    }
+  } catch(e) { console.error('[PhenixScans] getPopular error:', e); }
+  return [{ id: 'cf-error', title: 'Erreur chargement', cover: '' }];
 }
 
 async function search(query, page, invoke) {
