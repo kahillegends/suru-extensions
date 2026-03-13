@@ -44,8 +44,7 @@ async function getPopular(page, invoke) {
           results.push({
             id: baseUrl + '/manga/' + slug,
             title: m.title || m.name || '',
-            cover: m.cover || m.thumbnail || m.image || 
-                   (slug ? 'https://api.phenix-scans.co/uploads/mangas/' + slug + '/cover.webp' : ''),
+            cover: (m.coverImage ? 'https://api.phenix-scans.co/' + m.coverImage : (m.cover || m.thumbnail || m.image || '')),
             source_id: 'phenixscans'
           });
         });
@@ -99,7 +98,7 @@ async function search(query, page, invoke) {
           results.push({
             id: baseUrl + '/manga/' + slug,
             title: m.title || m.name || '',
-            cover: m.cover || m.thumbnail || '',
+            cover: (m.coverImage ? 'https://api.phenix-scans.co/' + m.coverImage : (m.cover || m.thumbnail || '')),
             source_id: 'phenixscans'
           });
         });
@@ -146,8 +145,7 @@ async function getMangaDetails(mangaId, invoke) {
         return {
           id: mangaId,
           title: m.title || m.name || '',
-          cover: m.cover || m.thumbnail || m.image || 
-                 (slug ? 'https://api.phenix-scans.co/uploads/mangas/' + slug + '/cover.webp' : ''),
+          cover: (m.coverImage ? 'https://api.phenix-scans.co/' + m.coverImage : (m.cover || m.thumbnail || m.image || '')),
           synopsis: m.synopsis || m.description || m.summary || '',
           author: m.author || (m.authors && m.authors[0]) || 'Inconnu',
           status: m.status || 'En cours',
@@ -197,15 +195,18 @@ async function getChapters(mangaId, invoke) {
       if (chList && Array.isArray(chList)) {
         chList.forEach(function(ch) {
           var num = ch.number || ch.chapterNumber || ch.num || '';
-          var slug = ch.slug || '';
-          // URL : /manga/{manga-slug}/chapitre/{number}
           var mangaSlug = mangaId.replace(baseUrl + '/manga/', '');
           var chUrl = baseUrl + '/manga/' + mangaSlug + '/chapitre/' + num;
+          // Formater la date depuis createdAt ISO
+          var date = '';
+          if (ch.createdAt) {
+            try { date = new Date(ch.createdAt).toLocaleDateString('fr-FR'); } catch(e) { date = ch.createdAt; }
+          }
           chapters.push({
             id: chUrl,
             title: 'Chapitre ' + num + (ch.title ? ' - ' + ch.title : ''),
             number: num,
-            date: ch.createdAt || ch.date || ch.publishedAt || ''
+            date: date
           });
         });
       }
