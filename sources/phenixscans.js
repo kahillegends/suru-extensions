@@ -1,5 +1,6 @@
 // Extension Phénix Scans pour SORU
-// API REST: api.phenix-scans.co/api/front/
+// API: api.phenix-scans.co/api/front/
+// Site SSR Next.js — données dans __NEXT_DATA__ ou HTML
 var baseUrl = 'https://phenix-scans.co';
 var apiUrl = 'https://api.phenix-scans.co/api/front';
 
@@ -13,99 +14,162 @@ function isCloudflare(html) {
   return false;
 }
 
-function formatDate(isoDate) {
-  if (!isoDate) return '';
-  try { return new Date(isoDate).toLocaleDateString('fr-FR'); } catch(e) { return isoDate; }
+// Extraire __NEXT_DATA__ depuis le HTML Next.js
+function extractNextData(html) {
+  try {
+    var match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (match) return JSON.parse(match[1]);
+  } catch(e) {}
+  return null;
 }
 
-function buildCover(coverImage) {
-  if (!coverImage) return '';
-  if (coverImage.startsWith('http')) return coverImage;
-  return 'https://api.phenix-scans.co/' + coverImage;
-}
-
-// ============================================================
-// getPopular — API directe JSON
-// ============================================================
 async function getPopular(page, invoke) {
   page = page || 0;
-  var endpoint = apiUrl + '/manga?page=' + (page + 1) + '&orderBy=views';
-  try {
-    var res = await invoke('fetch_html', { url: endpoint });
-    var data = JSON.parse(res);
-    if (data.mangas && Array.isArray(data.mangas)) {
-      return data.mangas.map(function(m) {
-        return {
-          id: baseUrl + '/manga/' + m.slug,
-          title: m.title || '',
-          cover: buildCover(m.coverImage),
-          source_id: 'phenixscans'
-        };
+  var url = baseUrl + '/manga?page=' + (page + 1) + '&orderBy=views';
+  var html = await invoke('fetch_html', { url: url });
+  if (isCloudflare(html)) return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
+
+  var results = [];
+
+  // Méthode 1 : __NEXT_DATA__ (Next.js SSR)
+  var nextData = extractNextData(html);
+  if (nextData) {
+    try {
+      // Chercher les mangas dans le pageProps
+      var props = nextData.props && nextData.props.pageProps;
+      var mangas = props && (props.mangas || props.data || props.items || props.comics);
+      if (mangas && Array.isArray(mangas)) {
+        mangas.forEach(function(m) {
+          var slug = m.slug || m.id || '';
+          results.push({
+            id: baseUrl + '/manga/' + slug,
+            title: m.title || m.name || '',
+            cover: (m.coverImage ? 'https://api.phenix-scans.co/' + m.coverImage : (m.cover || m.thumbnail || m.image || '')),
+            source_id: 'phenixscans'
+          });
+        });
+      }
+    } catch(e) {}
+  }
+
+  // Méthode 2 : scraping DOM si __NEXT_DATA__ n'a pas les données
+  if (results.length === 0) {
+    var doc = parseDOM(html);
+    var seen = new Set();
+    doc.querySelectorAll('a[href*="/manga/"]').forEach(function(a) {
+      var href = a.getAttribute('href') || '';
+      if (!href.match(/\/manga\/[^/]+$/) && !href.match(/\/manga\/[^/]+-\d+$/)) return;
+      var fullHref = href.startsWith('http') ? href : baseUrl + href;
+      if (seen.has(fullHref)) return;
+      seen.add(fullHref);
+      var container = a.closest('article, li, div[class*="card"], div[class*="manga"], div[class*="item"]');
+      if (!container) container = a;
+      var img = container.querySelector('img');
+      var titleEl = container.querySelector('h2, h3, h4, p[class*="title"], span[class*="title"]') || a;
+      var title = titleEl ? titleEl.textContent.trim() : '';
+      if (!title || title.length < 2) return;
+      results.push({
+        id: fullHref,
+        title: title,
+        cover: img ? (img.getAttribute('src') || img.getAttribute('data-src') || '') : '',
+        source_id: 'phenixscans'
       });
-    }
-  } catch(e) { console.error('[PhenixScans] getPopular:', e); }
-  return [{ id: 'cf-error', title: 'Erreur chargement', cover: '' }];
+    });
+  }
+
+  return results;
 }
 
-// ============================================================
-// search — même endpoint avec ?search=
-// ============================================================
 async function search(query, page, invoke) {
   page = page || 0;
-  var endpoint = apiUrl + '/manga?search=' + encodeURIComponent(query) + '&page=' + (page + 1);
-  try {
-    var res = await invoke('fetch_html', { url: endpoint });
-    var data = JSON.parse(res);
-    if (data.mangas && Array.isArray(data.mangas)) {
-      return data.mangas.map(function(m) {
-        return {
-          id: baseUrl + '/manga/' + m.slug,
-          title: m.title || '',
-          cover: buildCover(m.coverImage),
-          source_id: 'phenixscans'
-        };
+  var url = baseUrl + '/manga?search=' + encodeURIComponent(query) + '&page=' + (page + 1);
+  var html = await invoke('fetch_html', { url: url });
+  if (isCloudflare(html)) return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
+
+  var results = [];
+  var nextData = extractNextData(html);
+  if (nextData) {
+    try {
+      var props = nextData.props && nextData.props.pageProps;
+      var mangas = props && (props.mangas || props.data || props.items || props.results);
+      if (mangas && Array.isArray(mangas)) {
+        mangas.forEach(function(m) {
+          var slug = m.slug || m.id || '';
+          results.push({
+            id: baseUrl + '/manga/' + slug,
+            title: m.title || m.name || '',
+            cover: (m.coverImage ? 'https://api.phenix-scans.co/' + m.coverImage : (m.cover || m.thumbnail || '')),
+            source_id: 'phenixscans'
+          });
+        });
+      }
+    } catch(e) {}
+  }
+
+  if (results.length === 0) {
+    var doc = parseDOM(html);
+    var seen = new Set();
+    doc.querySelectorAll('a[href*="/manga/"]').forEach(function(a) {
+      var href = a.getAttribute('href') || '';
+      if (!href.match(/\/manga\/[^/]+/)) return;
+      var fullHref = href.startsWith('http') ? href : baseUrl + href;
+      if (seen.has(fullHref)) return;
+      seen.add(fullHref);
+      var container = a.closest('article, li, div') || a;
+      var img = container.querySelector('img');
+      var titleEl = container.querySelector('h2, h3, h4, p, span') || a;
+      results.push({
+        id: fullHref,
+        title: titleEl ? titleEl.textContent.trim() : '',
+        cover: img ? (img.getAttribute('src') || '') : '',
+        source_id: 'phenixscans'
       });
-    }
-  } catch(e) { console.error('[PhenixScans] search:', e); }
-  return [];
+    });
+  }
+
+  return results;
 }
 
-// ============================================================
-// getMangaDetails — /api/front/manga/{slug}
-// ============================================================
 async function getMangaDetails(mangaId, invoke) {
-  var slug = mangaId.replace(baseUrl + '/manga/', '');
-  var endpoint = apiUrl + '/manga/' + slug;
-  try {
-    var res = await invoke('fetch_html', { url: endpoint });
-    var data = JSON.parse(res);
-    var m = data.manga || data;
-    if (m && m.title) {
-      var genres = [];
-      if (m.genres && Array.isArray(m.genres)) {
-        genres = m.genres.map(function(g) { return typeof g === 'string' ? g : g.name || g.label || ''; });
-      }
-      return {
-        id: mangaId,
-        title: m.title || '',
-        cover: buildCover(m.coverImage),
-        synopsis: m.synopsis || m.description || '',
-        author: m.author || (m.team && m.team.name) || 'Inconnu',
-        status: m.status || 'En cours',
-        genres: genres,
-        source_id: 'phenixscans'
-      };
-    }
-  } catch(e) { console.error('[PhenixScans] getMangaDetails:', e); }
-
-  // Fallback HTML
   var html = await invoke('fetch_html', { url: mangaId });
   if (isCloudflare(html)) return null;
+
+  // Essayer __NEXT_DATA__ d'abord
+  var nextData = extractNextData(html);
+  if (nextData) {
+    try {
+      var props = nextData.props && nextData.props.pageProps;
+      var m = props && (props.manga || props.comic || props.data);
+      if (m) {
+        var slug = m.slug || m.id || '';
+        return {
+          id: mangaId,
+          title: m.title || m.name || '',
+          cover: (m.coverImage ? 'https://api.phenix-scans.co/' + m.coverImage : (m.cover || m.thumbnail || m.image || '')),
+          synopsis: m.synopsis || m.description || m.summary || '',
+          author: m.author || (m.authors && m.authors[0]) || 'Inconnu',
+          status: m.status || 'En cours',
+          genres: m.genres || m.tags || [],
+          source_id: 'phenixscans'
+        };
+      }
+    } catch(e) {}
+  }
+
+  // Fallback DOM
   var doc = parseDOM(html);
+  var title = '';
+  var h1 = doc.querySelector('h1');
+  if (h1) title = h1.textContent.trim();
+
+  var cover = '';
+  var img = doc.querySelector('img[class*="cover"], img[class*="thumbnail"], .cover img, header img');
+  if (img) cover = img.getAttribute('src') || img.getAttribute('data-src') || '';
+
   return {
     id: mangaId,
-    title: (doc.querySelector('h1') || {}).textContent || '',
-    cover: '',
+    title: title,
+    cover: cover,
     synopsis: '',
     author: 'Inconnu',
     status: 'En cours',
@@ -114,93 +178,117 @@ async function getMangaDetails(mangaId, invoke) {
   };
 }
 
-// ============================================================
-// getChapters — /api/front/manga/{slug} retourne chapters[]
-// ============================================================
 async function getChapters(mangaId, invoke) {
-  var slug = mangaId.replace(baseUrl + '/manga/', '');
-  var endpoint = apiUrl + '/manga/' + slug;
-  try {
-    var res = await invoke('fetch_html', { url: endpoint });
-    var data = JSON.parse(res);
-    var chList = data.chapters || (data.manga && data.manga.chapters) || [];
-    if (chList && Array.isArray(chList) && chList.length > 0) {
-      return chList.map(function(ch) {
-        var num = ch.number || ch.chapterNumber || '';
-        return {
-          id: baseUrl + '/manga/' + slug + '/chapitre/' + num,
-          title: 'Chapitre ' + num + (ch.title ? ' — ' + ch.title : ''),
-          number: num,
-          date: formatDate(ch.createdAt || ch.date || '')
-        };
-      });
-    }
-  } catch(e) { console.error('[PhenixScans] getChapters:', e); }
-
-  // Fallback HTML
   var html = await invoke('fetch_html', { url: mangaId });
   if (isCloudflare(html)) return [];
-  var doc = parseDOM(html);
+
   var chapters = [];
-  doc.querySelectorAll('a[href*="/chapitre/"]').forEach(function(a) {
-    var href = a.getAttribute('href') || '';
-    var fullHref = href.startsWith('http') ? href : baseUrl + href;
-    var numMatch = href.match(/\/chapitre\/([^/]+)/);
-    var num = numMatch ? numMatch[1] : '';
-    chapters.push({
-      id: fullHref,
-      title: 'Chapitre ' + num,
-      number: num,
-      date: ''
+
+  // __NEXT_DATA__ contient souvent la liste des chapitres
+  var nextData = extractNextData(html);
+  if (nextData) {
+    try {
+      var props = nextData.props && nextData.props.pageProps;
+      var manga = props && (props.manga || props.comic || props.data);
+      var chList = manga && (manga.chapters || manga.chapterList);
+      if (!chList && props) chList = props.chapters || props.chapterList;
+      if (chList && Array.isArray(chList)) {
+        chList.forEach(function(ch) {
+          var num = ch.number || ch.chapterNumber || ch.num || '';
+          var mangaSlug = mangaId.replace(baseUrl + '/manga/', '');
+          var chUrl = baseUrl + '/manga/' + mangaSlug + '/chapitre/' + num;
+          // Formater la date depuis createdAt ISO
+          var date = '';
+          if (ch.createdAt) {
+            try { date = new Date(ch.createdAt).toLocaleDateString('fr-FR'); } catch(e) { date = ch.createdAt; }
+          }
+          chapters.push({
+            id: chUrl,
+            title: 'Chapitre ' + num + (ch.title ? ' - ' + ch.title : ''),
+            number: num,
+            date: date
+          });
+        });
+      }
+    } catch(e) {}
+  }
+
+  // Fallback DOM
+  if (chapters.length === 0) {
+    var doc = parseDOM(html);
+    doc.querySelectorAll('a[href*="/chapitre/"]').forEach(function(a) {
+      var href = a.getAttribute('href') || '';
+      var fullHref = href.startsWith('http') ? href : baseUrl + href;
+      var numMatch = href.match(/\/chapitre\/([^/]+)/);
+      var num = numMatch ? numMatch[1] : href;
+      chapters.push({
+        id: fullHref,
+        title: a.textContent.trim() || 'Chapitre ' + num,
+        number: num,
+        date: ''
+      });
     });
-  });
+  }
+
   return chapters;
 }
 
-// ============================================================
-// getPages — images dans le HTML de la page chapitre
-// ============================================================
 async function getPages(chapterId, invoke) {
+  // chapterId = https://phenix-scans.co/manga/{slug}/chapitre/{num}
+  // API pages = https://api.phenix-scans.co/api/front/{slug}/{num}/pages (à tester)
+  // ou les images sont dans __NEXT_DATA__
+
   var html = await invoke('fetch_html', { url: chapterId });
   if (isCloudflare(html)) return [];
 
   var pages = [];
 
-  // Méthode 1 : balises img avec src api.phenix-scans.co
-  var doc = parseDOM(html);
-  doc.querySelectorAll('img').forEach(function(img) {
-    var src = img.getAttribute('src') || img.getAttribute('data-src') || '';
-    if (src && src.includes('api.phenix-scans.co/uploads')) {
-      pages.push(src.startsWith('http') ? src : 'https://api.phenix-scans.co/' + src);
-    }
-  });
-
-  // Méthode 2 : scripts JSON embarqués
-  if (pages.length === 0) {
-    doc.querySelectorAll('script').forEach(function(script) {
-      var content = script.textContent || '';
-      if (content.includes('uploads/mangas')) {
-        var matches = content.match(/https:\/\/api\.phenix-scans\.co\/uploads\/mangas\/[^"'\s]+\.webp[^"'\s]*/g);
-        if (matches) matches.forEach(function(url) {
-          pages.push(url.replace(/\\u0026/g, '&'));
-        });
+  // Méthode 1 : __NEXT_DATA__
+  var nextData = extractNextData(html);
+  if (nextData) {
+    try {
+      var props = nextData.props && nextData.props.pageProps;
+      var chapter = props && (props.chapter || props.data);
+      var images = chapter && (chapter.images || chapter.pages || chapter.pageUrls);
+      if (!images && props) images = props.images || props.pages;
+      if (images && Array.isArray(images)) {
+        pages = images.map(function(img) {
+          if (typeof img === 'string') return img;
+          return img.url || img.src || img.image || '';
+        }).filter(function(u) { return u && u.startsWith('http'); });
       }
+    } catch(e) {}
+  }
+
+  // Méthode 2 : API endpoint /api/front/{slug}/{num}/pages
+  if (pages.length === 0) {
+    try {
+      var parts = chapterId.replace(baseUrl + '/manga/', '').split('/chapitre/');
+      var mangaSlug = parts[0];
+      var chapterNum = parts[1];
+      var apiEndpoint = apiUrl + '/' + mangaSlug + '/' + chapterNum + '/pages';
+      var res = await invoke('fetch_html', { url: apiEndpoint });
+      if (!isCloudflare(res)) {
+        var data = JSON.parse(res);
+        if (Array.isArray(data)) {
+          pages = data.map(function(p) { return typeof p === 'string' ? p : p.url || p.image || ''; });
+        } else if (data.pages || data.images) {
+          var imgs = data.pages || data.images;
+          pages = imgs.map(function(p) { return typeof p === 'string' ? p : p.url || ''; });
+        }
+      }
+    } catch(e) {}
+  }
+
+  // Méthode 3 : scraper les images depuis le DOM
+  if (pages.length === 0) {
+    var doc = parseDOM(html);
+    doc.querySelectorAll('img[src*="api.phenix-scans.co"], img[src*="uploads/mangas"]').forEach(function(img) {
+      var src = img.getAttribute('src') || '';
+      if (src && src.startsWith('http')) pages.push(src);
     });
   }
 
-  // Méthode 3 : regex dans le HTML brut
-  if (pages.length === 0) {
-    var matches = html.match(/https:\/\/api\.phenix-scans\.co\/uploads\/mangas\/[^"'\s\\]+\.webp/g);
-    if (matches) {
-      var seen = new Set();
-      matches.forEach(function(url) {
-        var clean = url.split('?')[0];
-        if (!seen.has(clean)) { seen.add(clean); pages.push(url); }
-      });
-    }
-  }
-
-  console.log('[PhenixScans] ' + pages.length + ' pages pour ' + chapterId);
   return pages;
 }
 
