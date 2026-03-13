@@ -33,5 +33,12 @@
     "version": "1.0.1",
     "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/phenixscans.js",
     "icon_url": "https://phenix-scans.co/_nuxt/logo.vYdOKoai.png"
+  },
+  {
+    "id": "mangafire",
+    "name": "MangaFire",
+    "version": "1.0.0",
+    "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/mangafire.js",
+    "icon_url": "https://s.mfcdn.cc/assets/sites/mangafire/favicon.png?v4"
   }
 ]
