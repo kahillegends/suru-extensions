@@ -1,6 +1,8 @@
 // Extension Phénix Scans pour SORU
-// Site avec contenu chargé dynamiquement en JS — nécessite rendu navigateur
+// API: api.phenix-scans.co/api/front/
+// Site SSR Next.js — données dans __NEXT_DATA__ ou HTML
 var baseUrl = 'https://phenix-scans.co';
+var apiUrl = 'https://api.phenix-scans.co/api/front';
 
 function parseDOM(html) {
   return new DOMParser().parseFromString(html, 'text/html');
@@ -8,480 +10,292 @@ function parseDOM(html) {
 
 function isCloudflare(html) {
   if (!html || html === 'TIMEOUT' || html === 'CF_BLOCKED') return true;
-  if (html.startsWith('ERROR:')) return true;
-  if (html.includes('just a moment') && html.includes('checking your browser')) return true;
-  if (html.includes('challenge-running') || html.includes('_cf_chl_opt')) return true;
+  if (typeof html === 'string' && html.startsWith('ERROR:')) return true;
   return false;
 }
 
-// Fetch avec rendu JS complet (contenu dynamique)
-async function fetchRendered(url, invoke, waitSelector = null) {
-  return await invoke('fetch_html_rendered', {
-    url,
-    waitSelector,
-    waitMs: 3500
-  });
+// Extraire __NEXT_DATA__ depuis le HTML Next.js
+function extractNextData(html) {
+  try {
+    var match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (match) return JSON.parse(match[1]);
+  } catch(e) {}
+  return null;
 }
 
-async function getPopular(page = 0, invoke) {
-  const url = `${baseUrl}/manga/?m_orderby=trending&page=${page + 1}`;
-  // Attendre qu'un élément de manga soit présent dans le DOM
-  const html = await fetchRendered(url, invoke, '.manga-title, .post-title, h3 a, .item-thumb');
+async function getPopular(page, invoke) {
+  page = page || 0;
+  var url = baseUrl + '/manga?page=' + (page + 1) + '&orderBy=views';
+  var html = await invoke('fetch_html', { url: url });
   if (isCloudflare(html)) return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
 
-  const doc = parseDOM(html);
-  const results = [];
+  var results = [];
 
-  // Chercher tous les liens qui pointent vers des mangas
-  const seen = new Set();
-  doc.querySelectorAll('a[href]').forEach(a => {
-    const href = a.getAttribute('href') || '';
-    // Les URLs de manga Madara ont le format /manga/nom-du-manga/
-    if (!href.includes('/manga/') || href === baseUrl + '/manga/' || seen.has(href)) return;
-    // Éviter les liens de navigation
-    if (href.endsWith('/manga/') || href.endsWith('/manga')) return;
-    seen.add(href);
-
-    const container = a.closest('li, .bs, .bsx, article, .item, div[class*="manga"], div[class*="item"]');
-    if (!container) return;
-
-    const img = container.querySelector('img');
-    const titleEl = container.querySelector('.tt, .manga-title, h3, h4, h5, [class*="title"]') || a;
-    const title = (titleEl?.textContent || a.textContent || '').trim();
-    if (!title || title.length < 2) return;
-
-    results.push({
-      id: href,
-      title,
-      cover: img?.getAttribute('data-src') || img?.getAttribute('src') || '',
-      source_id: 'phenixscans'
-    });
-  });
-
-  console.log('[PhenixScans] getPopular:', results.length, 'résultats');
-  return results;
-}
-
-async function search(query, page = 0, invoke) {
-  const url = `${baseUrl}/?s=${encodeURIComponent(query)}&post_type=wp-manga&page=${page + 1}`;
-  const html = await fetchRendered(url, invoke, '.manga-title, .post-title, h3 a');
-  if (isCloudflare(html)) return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
-
-  const doc = parseDOM(html);
-  const results = [];
-  const seen = new Set();
-
-  doc.querySelectorAll('a[href]').forEach(a => {
-    const href = a.getAttribute('href') || '';
-    if (!href.includes('/manga/') || href.endsWith('/manga/') || seen.has(href)) return;
-    seen.add(href);
-
-    const container = a.closest('li, .bs, .bsx, article, div[class*="manga"], div[class*="item"]');
-    if (!container) return;
-
-    const img = container.querySelector('img');
-    const titleEl = container.querySelector('.tt, .manga-title, h3, h4, h5') || a;
-
-    results.push({
-      id: href,
-      title: (titleEl?.textContent || a.textContent || '').trim(),
-      cover: img?.getAttribute('data-src') || img?.getAttribute('src') || '',
-      source_id: 'phenixscans'
-    });
-  });
-
-  return results;
-}
-
-async function getMangaDetails(mangaId, invoke) {
-  const html = await fetchRendered(mangaId, invoke, '.post-title, .manga-title, h1');
-  if (isCloudflare(html)) return null;
-
-  const doc = parseDOM(html);
-
-  const title = (
-    doc.querySelector('.post-title h1')?.textContent ||
-    doc.querySelector('.post-title h3')?.textContent ||
-    doc.querySelector('h1.entry-title')?.textContent ||
-    doc.querySelector('h1')?.textContent ||
-    ''
-  ).trim();
-
-  const cover = (
-    doc.querySelector('.summary_image img')?.getAttribute('data-src') ||
-    doc.querySelector('.summary_image img')?.getAttribute('src') ||
-    doc.querySelector('.tab-summary img')?.getAttribute('data-src') ||
-    doc.querySelector('img[class*="cover"]')?.getAttribute('src') ||
-    ''
-  );
-
-  const synopsis = (
-    doc.querySelector('.summary__content p')?.textContent ||
-    doc.querySelector('.description-summary p')?.textContent ||
-    doc.querySelector('[class*="summary"] p')?.textContent ||
-    ''
-  ).trim();
-
-  let author = 'Inconnu';
-  const authorEl = doc.querySelector('.author-content a') ||
-    doc.querySelector('[class*="author"] a');
-  if (authorEl) author = authorEl.textContent.trim();
-
-  let status = 'En cours';
-  const statusEl = doc.querySelector('.post-status .summary-content') ||
-    doc.querySelector('[class*="status"] .summary-content');
-  if (statusEl) {
-    const s = statusEl.textContent.trim().toLowerCase();
-    if (s.includes('terminé') || s.includes('completed')) status = 'Terminé';
-    else if (s.includes('pause') || s.includes('hiatus')) status = 'En pause';
-  }
-
-  const genres = [];
-  doc.querySelectorAll('.genres-content a, [class*="genre"] a').forEach(el => {
-    const g = el.textContent.trim();
-    if (g) genres.push(g);
-  });
-
-  return { id: mangaId, title, cover, synopsis, author, status, genres, source_id: 'phenixscans' };
-}
-
-async function getChapters(mangaId, invoke) {
-  const html = await fetchRendered(mangaId, invoke, '.wp-manga-chapter, .chapter-item');
-  if (isCloudflare(html)) return [];
-
-  const doc = parseDOM(html);
-  const chapters = [];
-
-  doc.querySelectorAll('.wp-manga-chapter, .chapter-item, .listing-chapters_wrap li').forEach(el => {
-    const a = el.querySelector('a[href]');
-    if (!a) return;
-    const dateEl = el.querySelector('.chapter-release-date, .chapter-date');
-    chapters.push({
-      id: a.getAttribute('href') || '',
-      title: a.textContent.trim(),
-      number: a.textContent.trim(),
-      date: dateEl?.textContent.trim() || ''
-    });
-  });
-
-  return chapters;
-}
-
-async function getPages(chapterId, invoke) {
-  console.log('[PhenixScans] Warm-up...');
-  await invoke('warmup_page', {
-    pageUrl: chapterId,
-    cdnUrl: baseUrl + '/'
-  });
-
-  // Les pages aussi peuvent être en JS dynamique
-  const html = await fetchRendered(chapterId, invoke, '.reading-content img, .chapter-content img');
-  if (isCloudflare(html)) return [];
-
-  const doc = parseDOM(html);
-  let pages = [];
-
-  // Méthode 1 : ts_reader.run
-  for (const script of doc.querySelectorAll('script')) {
-    const content = script.textContent || '';
-    if (content.includes('ts_reader.run')) {
-      try {
-        const match = content.match(/ts_reader\.run\((\{[\s\S]*?\})\)/);
-        if (match) {
-          const data = JSON.parse(match[1]);
-          if (data.sources?.[0]?.images) {
-            pages = data.sources[0].images.map(img => img.replace('http://', 'https://'));
-          }
-        }
-      } catch(e) {}
-      break;
-    }
-  }
-
-  // Méthode 2 : images DOM
-  if (pages.length === 0) {
-    doc.querySelectorAll('.reading-content img, .read-container img, .chapter-content img, #readerarea img').forEach(img => {
-      const src = img.getAttribute('data-src') || img.getAttribute('src') || '';
-      if (src && src.startsWith('http') && !src.includes('placeholder')) {
-        pages.push(src.replace('http://', 'https://'));
-      }
-    });
-  }
-
-  console.log(`[PhenixScans] ${pages.length} pages trouvées`);
-  return pages;
-}
-
-({
-  baseUrl,
-  getPopular,
-  search,
-  getMangaDetails,
-  getChapters,
-  getPages
-});
-// Site basé sur WordPress + thème Madara (même moteur que SushiScan)
-var baseUrl = 'https://phenix-scans.co';
-
-function parseDOM(html) {
-  return new DOMParser().parseFromString(html, 'text/html');
-}
-
-function isCloudflare(html) {
-  if (!html || html === 'TIMEOUT' || html === 'CF_BLOCKED') return true;
-  if (html.startsWith('ERROR:')) return true;
-  if (html.includes('just a moment') && html.includes('checking your browser')) return true;
-  if (html.includes('challenge-running') || html.includes('_cf_chl_opt')) return true;
-  return false;
-}
-
-async function getPopular(page = 0, invoke) {
-  // Madara utilise /manga/?m_orderby=trending ou /manga/?page=N
-  const url = `${baseUrl}/manga/?m_orderby=trending&page=${page + 1}`;
-  const html = await invoke('fetch_html', { url });
-  if (isCloudflare(html)) return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
-
-  const doc = parseDOM(html);
-  const results = [];
-
-  // Debug : afficher les classes des premiers éléments pour identifier la structure
-  console.log('[PhenixScans] Title:', doc.title)
-  console.log('[PhenixScans] HTML length:', html.length)
-  const allLinks = doc.querySelectorAll('a[href*="phenix-scans.co/manga/"]')
-  console.log('[PhenixScans] Liens manga trouvés:', allLinks.length)
-  if (allLinks.length > 0) {
-    const parent = allLinks[0].closest('div, li, article')
-    console.log('[PhenixScans] Parent classe:', parent?.className)
-  }
-
-  // Sélecteurs Madara standard
-  const items = doc.querySelectorAll('.page-item-detail, .manga-item, .bsx, .c-image-hover');
-  console.log('[PhenixScans] Items trouvés:', items.length)
-  items.forEach(el => {
-    const a = el.querySelector('a[href]');
-    const img = el.querySelector('img');
-    const titleEl = el.querySelector('.post-title a, .tt, .title, h3 a, h5 a');
-    if (!a) return;
-    const cover = img?.getAttribute('data-src') || img?.getAttribute('src') || '';
-    results.push({
-      id: a.getAttribute('href') || '',
-      title: (titleEl?.textContent || a.textContent || '').trim(),
-      cover,
-      source_id: 'phenixscans'
-    });
-  });
-
-  return results;
-}
-
-async function search(query, page = 0, invoke) {
-  // Madara search endpoint
-  const url = `${baseUrl}/?s=${encodeURIComponent(query)}&post_type=wp-manga&page=${page + 1}`;
-  const html = await invoke('fetch_html', { url });
-  if (isCloudflare(html)) return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
-
-  const doc = parseDOM(html);
-  const results = [];
-
-  const items = doc.querySelectorAll('.page-item-detail, .c-image-hover, .bsx, .tab-thumb');
-  items.forEach(el => {
-    const a = el.querySelector('a[href]');
-    const img = el.querySelector('img');
-    const titleEl = el.querySelector('.post-title a, .tt, h3 a, h5 a');
-    if (!a) return;
-    results.push({
-      id: a.getAttribute('href') || '',
-      title: (titleEl?.textContent || a.textContent || '').trim(),
-      cover: img?.getAttribute('data-src') || img?.getAttribute('src') || '',
-      source_id: 'phenixscans'
-    });
-  });
-
-  return results;
-}
-
-async function getMangaDetails(mangaId, invoke) {
-  const html = await invoke('fetch_html', { url: mangaId });
-  if (isCloudflare(html)) return null;
-
-  const doc = parseDOM(html);
-
-  // Titre
-  const title = (
-    doc.querySelector('.post-title h1')?.textContent ||
-    doc.querySelector('.post-title h3')?.textContent ||
-    doc.querySelector('h1.entry-title')?.textContent ||
-    ''
-  ).trim();
-
-  // Cover
-  const cover = (
-    doc.querySelector('.summary_image img')?.getAttribute('data-src') ||
-    doc.querySelector('.summary_image img')?.getAttribute('src') ||
-    doc.querySelector('.tab-summary img')?.getAttribute('data-src') ||
-    ''
-  );
-
-  // Synopsis
-  const synopsis = (
-    doc.querySelector('.summary__content p')?.textContent ||
-    doc.querySelector('.description-summary p')?.textContent ||
-    doc.querySelector('[class*="summary"] p')?.textContent ||
-    ''
-  ).trim();
-
-  // Auteur
-  let author = 'Inconnu';
-  const authorEl = doc.querySelector('.author-content a') ||
-    doc.querySelector('[class*="author"] a') ||
-    doc.querySelector('.manga-authors a');
-  if (authorEl) author = authorEl.textContent.trim();
-
-  // Statut
-  let status = 'En cours';
-  const statusEl = doc.querySelector('.post-status .summary-content') ||
-    doc.querySelector('[class*="status"] .summary-content') ||
-    doc.querySelector('.manga-status');
-  if (statusEl) {
-    const s = statusEl.textContent.trim().toLowerCase();
-    if (s.includes('terminé') || s.includes('completed') || s.includes('fin')) status = 'Terminé';
-    else if (s.includes('pause') || s.includes('hiatus')) status = 'En pause';
-  }
-
-  // Genres
-  const genres = [];
-  doc.querySelectorAll('.genres-content a, .manga-genres a, [class*="genre"] a').forEach(el => {
-    const g = el.textContent.trim();
-    if (g) genres.push(g);
-  });
-
-  return { id: mangaId, title, cover, synopsis, author, status, genres, source_id: 'phenixscans' };
-}
-
-async function getChapters(mangaId, invoke) {
-  // Madara charge les chapitres via AJAX ou directement dans le HTML
-  const html = await invoke('fetch_html', { url: mangaId });
-  if (isCloudflare(html)) return [];
-
-  const doc = parseDOM(html);
-  const chapters = [];
-
-  // Sélecteurs Madara standard pour la liste des chapitres
-  const items = doc.querySelectorAll('.wp-manga-chapter, .chapter-item, .listing-chapters_wrap li');
-  items.forEach(el => {
-    const a = el.querySelector('a[href]');
-    if (!a) return;
-    const href = a.getAttribute('href') || '';
-    const title = a.textContent.trim();
-    const dateEl = el.querySelector('.chapter-release-date, .chapter-date');
-    chapters.push({
-      id: href,
-      title,
-      number: title,
-      date: dateEl?.textContent.trim() || ''
-    });
-  });
-
-  // Si aucun chapitre trouvé, essayer le fallback AJAX Madara
-  if (chapters.length === 0) {
-    console.log('[PhenixScans] Chapitres non trouvés dans le HTML, essai AJAX Madara...');
+  // Méthode 1 : __NEXT_DATA__ (Next.js SSR)
+  var nextData = extractNextData(html);
+  if (nextData) {
     try {
-      // Extraire le post ID depuis le HTML
-      const postIdMatch = html.match(/manga_id\s*[:=]\s*['""]?(\d+)/i) ||
-        html.match(/var\s+mangaID\s*=\s*(\d+)/) ||
-        html.match(/"manga_id"\s*:\s*(\d+)/);
-      if (postIdMatch) {
-        const postId = postIdMatch[1];
-        const ajaxHtml = await invoke('fetch_html', {
-          url: `${baseUrl}/wp-admin/admin-ajax.php`,
+      // Chercher les mangas dans le pageProps
+      var props = nextData.props && nextData.props.pageProps;
+      var mangas = props && (props.mangas || props.data || props.items || props.comics);
+      if (mangas && Array.isArray(mangas)) {
+        mangas.forEach(function(m) {
+          var slug = m.slug || m.id || '';
+          results.push({
+            id: baseUrl + '/manga/' + slug,
+            title: m.title || m.name || '',
+            cover: m.cover || m.thumbnail || m.image || 
+                   (slug ? 'https://api.phenix-scans.co/uploads/mangas/' + slug + '/cover.webp' : ''),
+            source_id: 'phenixscans'
+          });
         });
-        // fallback : chercher dans le DOM différemment
-        console.log('[PhenixScans] Post ID:', postId);
       }
-    } catch(e) {
-      console.error('[PhenixScans] Erreur AJAX:', e);
-    }
+    } catch(e) {}
+  }
+
+  // Méthode 2 : scraping DOM si __NEXT_DATA__ n'a pas les données
+  if (results.length === 0) {
+    var doc = parseDOM(html);
+    var seen = new Set();
+    doc.querySelectorAll('a[href*="/manga/"]').forEach(function(a) {
+      var href = a.getAttribute('href') || '';
+      if (!href.match(/\/manga\/[^/]+$/) && !href.match(/\/manga\/[^/]+-\d+$/)) return;
+      var fullHref = href.startsWith('http') ? href : baseUrl + href;
+      if (seen.has(fullHref)) return;
+      seen.add(fullHref);
+      var container = a.closest('article, li, div[class*="card"], div[class*="manga"], div[class*="item"]');
+      if (!container) container = a;
+      var img = container.querySelector('img');
+      var titleEl = container.querySelector('h2, h3, h4, p[class*="title"], span[class*="title"]') || a;
+      var title = titleEl ? titleEl.textContent.trim() : '';
+      if (!title || title.length < 2) return;
+      results.push({
+        id: fullHref,
+        title: title,
+        cover: img ? (img.getAttribute('src') || img.getAttribute('data-src') || '') : '',
+        source_id: 'phenixscans'
+      });
+    });
+  }
+
+  return results;
+}
+
+async function search(query, page, invoke) {
+  page = page || 0;
+  var url = baseUrl + '/manga?search=' + encodeURIComponent(query) + '&page=' + (page + 1);
+  var html = await invoke('fetch_html', { url: url });
+  if (isCloudflare(html)) return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
+
+  var results = [];
+  var nextData = extractNextData(html);
+  if (nextData) {
+    try {
+      var props = nextData.props && nextData.props.pageProps;
+      var mangas = props && (props.mangas || props.data || props.items || props.results);
+      if (mangas && Array.isArray(mangas)) {
+        mangas.forEach(function(m) {
+          var slug = m.slug || m.id || '';
+          results.push({
+            id: baseUrl + '/manga/' + slug,
+            title: m.title || m.name || '',
+            cover: m.cover || m.thumbnail || '',
+            source_id: 'phenixscans'
+          });
+        });
+      }
+    } catch(e) {}
+  }
+
+  if (results.length === 0) {
+    var doc = parseDOM(html);
+    var seen = new Set();
+    doc.querySelectorAll('a[href*="/manga/"]').forEach(function(a) {
+      var href = a.getAttribute('href') || '';
+      if (!href.match(/\/manga\/[^/]+/)) return;
+      var fullHref = href.startsWith('http') ? href : baseUrl + href;
+      if (seen.has(fullHref)) return;
+      seen.add(fullHref);
+      var container = a.closest('article, li, div') || a;
+      var img = container.querySelector('img');
+      var titleEl = container.querySelector('h2, h3, h4, p, span') || a;
+      results.push({
+        id: fullHref,
+        title: titleEl ? titleEl.textContent.trim() : '',
+        cover: img ? (img.getAttribute('src') || '') : '',
+        source_id: 'phenixscans'
+      });
+    });
+  }
+
+  return results;
+}
+
+async function getMangaDetails(mangaId, invoke) {
+  var html = await invoke('fetch_html', { url: mangaId });
+  if (isCloudflare(html)) return null;
+
+  // Essayer __NEXT_DATA__ d'abord
+  var nextData = extractNextData(html);
+  if (nextData) {
+    try {
+      var props = nextData.props && nextData.props.pageProps;
+      var m = props && (props.manga || props.comic || props.data);
+      if (m) {
+        var slug = m.slug || m.id || '';
+        return {
+          id: mangaId,
+          title: m.title || m.name || '',
+          cover: m.cover || m.thumbnail || m.image || 
+                 (slug ? 'https://api.phenix-scans.co/uploads/mangas/' + slug + '/cover.webp' : ''),
+          synopsis: m.synopsis || m.description || m.summary || '',
+          author: m.author || (m.authors && m.authors[0]) || 'Inconnu',
+          status: m.status || 'En cours',
+          genres: m.genres || m.tags || [],
+          source_id: 'phenixscans'
+        };
+      }
+    } catch(e) {}
+  }
+
+  // Fallback DOM
+  var doc = parseDOM(html);
+  var title = '';
+  var h1 = doc.querySelector('h1');
+  if (h1) title = h1.textContent.trim();
+
+  var cover = '';
+  var img = doc.querySelector('img[class*="cover"], img[class*="thumbnail"], .cover img, header img');
+  if (img) cover = img.getAttribute('src') || img.getAttribute('data-src') || '';
+
+  return {
+    id: mangaId,
+    title: title,
+    cover: cover,
+    synopsis: '',
+    author: 'Inconnu',
+    status: 'En cours',
+    genres: [],
+    source_id: 'phenixscans'
+  };
+}
+
+async function getChapters(mangaId, invoke) {
+  var html = await invoke('fetch_html', { url: mangaId });
+  if (isCloudflare(html)) return [];
+
+  var chapters = [];
+
+  // __NEXT_DATA__ contient souvent la liste des chapitres
+  var nextData = extractNextData(html);
+  if (nextData) {
+    try {
+      var props = nextData.props && nextData.props.pageProps;
+      var manga = props && (props.manga || props.comic || props.data);
+      var chList = manga && (manga.chapters || manga.chapterList);
+      if (!chList && props) chList = props.chapters || props.chapterList;
+      if (chList && Array.isArray(chList)) {
+        chList.forEach(function(ch) {
+          var num = ch.number || ch.chapterNumber || ch.num || '';
+          var slug = ch.slug || '';
+          // URL : /manga/{manga-slug}/chapitre/{number}
+          var mangaSlug = mangaId.replace(baseUrl + '/manga/', '');
+          var chUrl = baseUrl + '/manga/' + mangaSlug + '/chapitre/' + num;
+          chapters.push({
+            id: chUrl,
+            title: 'Chapitre ' + num + (ch.title ? ' - ' + ch.title : ''),
+            number: num,
+            date: ch.createdAt || ch.date || ch.publishedAt || ''
+          });
+        });
+      }
+    } catch(e) {}
+  }
+
+  // Fallback DOM
+  if (chapters.length === 0) {
+    var doc = parseDOM(html);
+    doc.querySelectorAll('a[href*="/chapitre/"]').forEach(function(a) {
+      var href = a.getAttribute('href') || '';
+      var fullHref = href.startsWith('http') ? href : baseUrl + href;
+      var numMatch = href.match(/\/chapitre\/([^/]+)/);
+      var num = numMatch ? numMatch[1] : href;
+      chapters.push({
+        id: fullHref,
+        title: a.textContent.trim() || 'Chapitre ' + num,
+        number: num,
+        date: ''
+      });
+    });
   }
 
   return chapters;
 }
 
 async function getPages(chapterId, invoke) {
-  // Warm-up CDN si applicable
-  console.log('[PhenixScans] Warm-up...');
-  await invoke('warmup_page', {
-    pageUrl: chapterId,
-    cdnUrl: baseUrl + '/'
-  });
+  // chapterId = https://phenix-scans.co/manga/{slug}/chapitre/{num}
+  // API pages = https://api.phenix-scans.co/api/front/{slug}/{num}/pages (à tester)
+  // ou les images sont dans __NEXT_DATA__
 
-  const html = await invoke('fetch_html', { url: chapterId });
+  var html = await invoke('fetch_html', { url: chapterId });
   if (isCloudflare(html)) return [];
 
-  const doc = parseDOM(html);
-  let pages = [];
+  var pages = [];
 
-  // Méthode 1 : ts_reader.run (Madara standard)
-  const scripts = doc.querySelectorAll('script');
-  for (const script of scripts) {
-    const content = script.textContent || '';
-    if (content.includes('ts_reader.run')) {
-      try {
-        const match = content.match(/ts_reader\.run\((\{[\s\S]*?\})\)/);
-        if (match) {
-          const data = JSON.parse(match[1]);
-          if (data.sources?.[0]?.images) {
-            pages = data.sources[0].images.map(img => img.replace('http://', 'https://'));
-          }
-        }
-      } catch(e) { console.error('[PhenixScans] ts_reader parse error:', e); }
-      break;
-    }
+  // Méthode 1 : __NEXT_DATA__
+  var nextData = extractNextData(html);
+  if (nextData) {
+    try {
+      var props = nextData.props && nextData.props.pageProps;
+      var chapter = props && (props.chapter || props.data);
+      var images = chapter && (chapter.images || chapter.pages || chapter.pageUrls);
+      if (!images && props) images = props.images || props.pages;
+      if (images && Array.isArray(images)) {
+        pages = images.map(function(img) {
+          if (typeof img === 'string') return img;
+          return img.url || img.src || img.image || '';
+        }).filter(function(u) { return u && u.startsWith('http'); });
+      }
+    } catch(e) {}
   }
 
-  // Méthode 2 : chercher dans le HTML brut
+  // Méthode 2 : API endpoint /api/front/{slug}/{num}/pages
   if (pages.length === 0) {
     try {
-      const match = html.match(/ts_reader\.run\((\{[\s\S]*?\})\)/);
-      if (match) {
-        const data = JSON.parse(match[1]);
-        if (data.sources?.[0]?.images) {
-          pages = data.sources[0].images.map(img => img.replace('http://', 'https://'));
+      var parts = chapterId.replace(baseUrl + '/manga/', '').split('/chapitre/');
+      var mangaSlug = parts[0];
+      var chapterNum = parts[1];
+      var apiEndpoint = apiUrl + '/' + mangaSlug + '/' + chapterNum + '/pages';
+      var res = await invoke('fetch_html', { url: apiEndpoint });
+      if (!isCloudflare(res)) {
+        var data = JSON.parse(res);
+        if (Array.isArray(data)) {
+          pages = data.map(function(p) { return typeof p === 'string' ? p : p.url || p.image || ''; });
+        } else if (data.pages || data.images) {
+          var imgs = data.pages || data.images;
+          pages = imgs.map(function(p) { return typeof p === 'string' ? p : p.url || ''; });
         }
       }
     } catch(e) {}
   }
 
-  // Méthode 3 : fallback DOM — images dans le reader Madara
+  // Méthode 3 : scraper les images depuis le DOM
   if (pages.length === 0) {
-    const selectors = [
-      '.reading-content img',
-      '.read-container img',
-      '.chapter-content img',
-      '#readerarea img',
-      '.wp-manga-chapter-img',
-    ];
-    for (const sel of selectors) {
-      doc.querySelectorAll(sel).forEach(img => {
-        const src = img.getAttribute('data-src') ||
-          img.getAttribute('src') ||
-          img.getAttribute('data-lazy-src') || '';
-        if (src && src.startsWith('http') && !src.includes('placeholder')) {
-          pages.push(src.replace('http://', 'https://'));
-        }
-      });
-      if (pages.length > 0) break;
-    }
+    var doc = parseDOM(html);
+    doc.querySelectorAll('img[src*="api.phenix-scans.co"], img[src*="uploads/mangas"]').forEach(function(img) {
+      var src = img.getAttribute('src') || '';
+      if (src && src.startsWith('http')) pages.push(src);
+    });
   }
 
-  console.log(`[PhenixScans] ${pages.length} pages trouvées`);
   return pages;
 }
 
 ({
-  baseUrl,
-  getPopular,
-  search,
-  getMangaDetails,
-  getChapters,
-  getPages
+  baseUrl: baseUrl,
+  getPopular: getPopular,
+  search: search,
+  getMangaDetails: getMangaDetails,
+  getChapters: getChapters,
+  getPages: getPages
 });
