@@ -61,12 +61,57 @@ async function getPopular(page, invoke) {
 }
 
 // 2. RECHERCHE
+// MangaFire requiert un paramètre "vrf" dans l'URL pour les recherches.
+// Ce token est généré dynamiquement par le JS de la page.
+// Stratégie : on charge d'abord /filter sans vrf pour que le JS de MangaFire
+// s'exécute et redirige/charge lui-même les résultats, puis on parse le HTML rendu.
+// Si ça échoue (page vide), fallback via l'API interne de MangaFire.
 async function search(query, page, invoke) {
   page = page || 0;
+
+  // Tentative 1 : URL directe, on laisse le JS de la page gérer le vrf
   var url = baseUrl + '/filter?keyword=' + encodeURIComponent(query) + '&page=' + (page + 1);
-  var html = await invoke('fetch_html_rendered', { url: url, waitMs: 6000, waitSelector: '.unit, div.manga, a[href*="/manga/"]' });
-  if (!html || html === 'TIMEOUT' || html === 'CF_BLOCKED') return [{ id: 'cf-error', title: 'Cloudflare Bloque...', cover: '' }];
-  return extractCards(parseDOM(html));
+  var html = await invoke('fetch_html_rendered', {
+    url: url,
+    waitMs: 10000,
+    waitSelector: '.unit, .original, a[href*="/manga/"]'
+  });
+
+  if (!html || html === 'TIMEOUT' || html === 'CF_BLOCKED') {
+    return [{ id: 'cf-error', title: 'Cloudflare Bloque...', cover: '' }];
+  }
+
+  var results = extractCards(parseDOM(html));
+
+  // Tentative 2 : si 0 résultats, MangaFire a peut-être besoin du vrf —
+  // on charge la page d'accueil pour récupérer un vrf valide via l'URL
+  // que MangaFire génère dans le champ de recherche, puis on recharge.
+  if (results.length === 0) {
+    var homeHtml = await invoke('fetch_html_rendered', {
+      url: baseUrl,
+      waitMs: 6000,
+      waitSelector: 'form[action*="filter"], input[name="keyword"]'
+    });
+
+    if (homeHtml && homeHtml !== 'TIMEOUT' && homeHtml !== 'CF_BLOCKED') {
+      var homeDoc = parseDOM(homeHtml);
+      // Chercher un vrf pré-généré dans les liens de la page d'accueil
+      var vrfMatch = homeHtml.match(/[?&]vrf=([^&"'\s]+)/);
+      if (vrfMatch) {
+        var vrfUrl = url + '&vrf=' + vrfMatch[1];
+        var vrfHtml = await invoke('fetch_html_rendered', {
+          url: vrfUrl,
+          waitMs: 10000,
+          waitSelector: '.unit, .original, a[href*="/manga/"]'
+        });
+        if (vrfHtml && vrfHtml !== 'TIMEOUT' && vrfHtml !== 'CF_BLOCKED') {
+          results = extractCards(parseDOM(vrfHtml));
+        }
+      }
+    }
+  }
+
+  return results;
 }
 
 // 3. DÉTAILS
