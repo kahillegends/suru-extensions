@@ -5,7 +5,7 @@ function parseDOM(html) {
   return new DOMParser().parseFromString(html, 'text/html');
 }
 
-// 1. POPULAIRES
+// 1. POPULAIRES (Grille complète)
 async function getPopular(page, invoke) {
   page = page || 0;
   var url = baseUrl + '/filter?sort=trending&page=' + (page + 1);
@@ -16,19 +16,23 @@ async function getPopular(page, invoke) {
   var doc = parseDOM(html);
   var seen = new Set();
 
-  // On cible TOUS les liens d'images de la page
-  doc.querySelectorAll('a.poster').forEach(function(a) {
-    var href = a.getAttribute('href');
-    var img = a.querySelector('img');
+  // On cible TOUTES les structures de cartes possibles sur MF
+  doc.querySelectorAll('.unit, .original.card-lg, div.manga').forEach(function(card) {
+    var a = card.querySelector('a.poster') || card.querySelector('a');
+    var img = card.querySelector('img');
     
-    if (href && img) {
+    if (a && img) {
+      var href = a.getAttribute('href');
       var fullHref = href.startsWith('http') ? href : baseUrl + href;
       if (seen.has(fullHref)) return;
       seen.add(fullHref);
 
+      var titleEl = card.querySelector('.info .title') || card.querySelector('.title') || img;
+      var titleText = titleEl.textContent ? titleEl.textContent.trim() : (img.getAttribute('alt') || 'Inconnu');
+
       results.push({
         id: fullHref,
-        title: img.getAttribute('alt') || a.getAttribute('title') || 'Inconnu',
+        title: titleText,
         cover: img.getAttribute('src') || img.getAttribute('data-src') || '',
         source_id: 'mangafire'
       });
@@ -38,7 +42,7 @@ async function getPopular(page, invoke) {
   return results;
 }
 
-// 2. RECHERCHE
+// 2. RECHERCHE (Grille complète)
 async function search(query, page, invoke) {
   page = page || 0;
   var url = baseUrl + '/filter?keyword=' + encodeURIComponent(query) + '&page=' + (page + 1);
@@ -49,18 +53,22 @@ async function search(query, page, invoke) {
   var doc = parseDOM(html);
   var seen = new Set();
 
-  doc.querySelectorAll('a.poster').forEach(function(a) {
-    var href = a.getAttribute('href');
-    var img = a.querySelector('img');
+  doc.querySelectorAll('.unit, .original.card-lg, div.manga').forEach(function(card) {
+    var a = card.querySelector('a.poster') || card.querySelector('a');
+    var img = card.querySelector('img');
     
-    if (href && img) {
+    if (a && img) {
+      var href = a.getAttribute('href');
       var fullHref = href.startsWith('http') ? href : baseUrl + href;
       if (seen.has(fullHref)) return;
       seen.add(fullHref);
 
+      var titleEl = card.querySelector('.info .title') || card.querySelector('.title') || img;
+      var titleText = titleEl.textContent ? titleEl.textContent.trim() : (img.getAttribute('alt') || 'Inconnu');
+
       results.push({
         id: fullHref,
-        title: img.getAttribute('alt') || a.getAttribute('title') || 'Inconnu',
+        title: titleText,
         cover: img.getAttribute('src') || img.getAttribute('data-src') || '',
         source_id: 'mangafire'
       });
@@ -121,7 +129,6 @@ async function getChapters(mangaId, invoke) {
     });
   });
 
-  // Si on n'a rien trouvé, c'est peut-être un format "List" au lieu de "Grid"
   if (chapters.length === 0) {
     doc.querySelectorAll('.chapter-list li a, .episodes li a').forEach(function(a) {
       var href = a.getAttribute('href');
@@ -136,7 +143,6 @@ async function getChapters(mangaId, invoke) {
     });
   }
 
-  // Inverser pour avoir le plus récent en premier
   chapters.reverse();
 
   var uniqueChapters = [];
@@ -151,31 +157,41 @@ async function getChapters(mangaId, invoke) {
   return uniqueChapters;
 }
 
-// 5. PAGES DU CHAPITRE (CORRIGÉ)
+// 5. PAGES DU CHAPITRE (Mode Hack)
 async function getPages(chapterId, invoke) {
-  // 🟢 On ne met plus de waitSelector. On attend juste 8 secondes en forçant le chargement.
-  var html = await invoke('fetch_html_rendered', { url: chapterId, waitSelector: null, waitMs: 8000 });
+  // On attend 10 secondes pour laisser le temps au Cloudflare de passer 
+  // ET aux scripts de MangaFire de déchiffrer les images.
+  var html = await invoke('fetch_html_rendered', { url: chapterId, waitMs: 10000 });
   if (html === 'TIMEOUT' || html === 'CF_BLOCKED') return [];
 
   var doc = parseDOM(html);
   var pages = [];
 
-  // On aspire absolument TOUTES les images de la page, et on filtre celles qui servent au design
-  doc.querySelectorAll('img').forEach(function(img) {
+  // MTHODE 1 : Chercher les balises images classiques
+  doc.querySelectorAll('#page-wrapper img, .reader img, .page-break img').forEach(function(img) {
     var src = img.getAttribute('src') || img.getAttribute('data-src');
-    
     if (src && src.startsWith('http')) {
       var lowerSrc = src.toLowerCase();
-      // On exclut les logos, icônes, spinners, avatars...
-      if (!lowerSrc.includes('logo') && 
-          !lowerSrc.includes('spinner') && 
-          !lowerSrc.includes('assets') && 
-          !lowerSrc.includes('avatar') &&
-          !lowerSrc.includes('icon')) {
+      if (!lowerSrc.includes('logo') && !lowerSrc.includes('spinner')) {
         pages.push(src);
       }
     }
   });
+
+  // MÉTHODE 2 (Le Hack) : MF cache souvent ses images dans des variables JavaScript 
+  // pour empêcher le scraping. On va chercher TOUTES les URLs d'images directement dans le texte brut de la page !
+  if (pages.length === 0) {
+    var regex = /"(https:\/\/[^"]+\.(?:jpg|jpeg|png|webp|avif)[^"]*)"/gi;
+    var match;
+    while ((match = regex.exec(html)) !== null) {
+      var url = match[1].replace(/\\/g, ''); // Nettoyer les \ d'échappement JSON
+      var lowerUrl = url.toLowerCase();
+      // On exclut les icônes du site pour ne garder que les planches du manga
+      if (!lowerUrl.includes('logo') && !lowerUrl.includes('avatar') && !lowerUrl.includes('icon')) {
+        if (!pages.includes(url)) pages.push(url);
+      }
+    }
+  }
 
   return pages;
 }
