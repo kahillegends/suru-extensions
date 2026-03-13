@@ -16,7 +16,6 @@ async function getPopular(page, invoke) {
   var doc = parseDOM(html);
   var seen = new Set();
 
-  // On cible TOUTES les structures de cartes possibles sur MF
   doc.querySelectorAll('.unit, .original.card-lg, div.manga').forEach(function(card) {
     var a = card.querySelector('a.poster') || card.querySelector('a');
     var img = card.querySelector('img');
@@ -157,43 +156,32 @@ async function getChapters(mangaId, invoke) {
   return uniqueChapters;
 }
 
-// 5. PAGES DU CHAPITRE (Mode Hack)
+// 5. PAGES DU CHAPITRE
 async function getPages(chapterId, invoke) {
-  // On attend 10 secondes pour laisser le temps au Cloudflare de passer 
-  // ET aux scripts de MangaFire de déchiffrer les images.
-  var html = await invoke('fetch_html_rendered', { url: chapterId, waitMs: 10000 });
-  if (html === 'TIMEOUT' || html === 'CF_BLOCKED') return [];
+  // Extraire l'ID numérique du chapitre depuis l'URL
+  // ex: https://mangafire.to/read/manga-name.abc/en/chapter/123
+  var chapterNumMatch = chapterId.match(/\/chapter\/(\d+)/);
+  if (!chapterNumMatch) return [];
 
-  var doc = parseDOM(html);
-  var pages = [];
+  var chapterNum = chapterNumMatch[1];
+  var apiUrl = baseUrl + '/ajax/read/chapter/' + chapterNum;
 
-  // MTHODE 1 : Chercher les balises images classiques
-  doc.querySelectorAll('#page-wrapper img, .reader img, .page-break img').forEach(function(img) {
-    var src = img.getAttribute('src') || img.getAttribute('data-src');
-    if (src && src.startsWith('http')) {
-      var lowerSrc = src.toLowerCase();
-      if (!lowerSrc.includes('logo') && !lowerSrc.includes('spinner')) {
-        pages.push(src);
-      }
+  var json = await invoke('fetch_json', {
+    url: apiUrl,
+    headers: {
+      'X-Requested-With': 'XMLHttpRequest',
+      'Accept': 'application/json, text/javascript, */*; q=0.01'
     }
   });
 
-  // MÉTHODE 2 (Le Hack) : MF cache souvent ses images dans des variables JavaScript 
-  // pour empêcher le scraping. On va chercher TOUTES les URLs d'images directement dans le texte brut de la page !
-  if (pages.length === 0) {
-    var regex = /"(https:\/\/[^"]+\.(?:jpg|jpeg|png|webp|avif)[^"]*)"/gi;
-    var match;
-    while ((match = regex.exec(html)) !== null) {
-      var url = match[1].replace(/\\/g, ''); // Nettoyer les \ d'échappement JSON
-      var lowerUrl = url.toLowerCase();
-      // On exclut les icônes du site pour ne garder que les planches du manga
-      if (!lowerUrl.includes('logo') && !lowerUrl.includes('avatar') && !lowerUrl.includes('icon')) {
-        if (!pages.includes(url)) pages.push(url);
-      }
-    }
-  }
+  if (!json || !json.result || !json.result.images) return [];
 
-  return pages;
+  // Chaque entrée est un array [url, 1, 0]
+  return json.result.images.map(function(entry) {
+    return entry[0];
+  }).filter(function(url) {
+    return url && url.startsWith('http');
+  });
 }
 
 ({
