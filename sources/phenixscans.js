@@ -14,7 +14,6 @@ function isCloudflare(html) {
   return false;
 }
 
-// Extraire __NEXT_DATA__ depuis le HTML Next.js
 function extractNextData(html) {
   try {
     var match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
@@ -126,7 +125,6 @@ async function search(query, page, invoke) {
   return results;
 }
 
-// 🟢 CORRECTION: getMangaDetails récupère le synopsis et protège la cover
 async function getMangaDetails(mangaId, invoke) {
   var html = await invoke('fetch_html', { url: mangaId });
   if (isCloudflare(html)) return null;
@@ -151,15 +149,16 @@ async function getMangaDetails(mangaId, invoke) {
     } catch(e) {}
   }
 
-  // Fallback DOM
+  // Fallback DOM (Corrigé pour ne plus attraper le logo du site)
   var doc = parseDOM(html);
   var h1 = doc.querySelector('h1');
   if (h1) details.title = h1.textContent.trim();
 
-  var img = doc.querySelector('img[class*="cover"], img[class*="thumbnail"], .cover img, header img');
+  // On cible plus précisément les conteneurs d'images de manga, pas le header
+  var img = doc.querySelector('div[class*="manga"] img, div[class*="info"] img, .thumb img');
   if (img) {
     var src = img.getAttribute('src') || img.getAttribute('data-src');
-    if (src) details.cover = src.startsWith('http') ? src : baseUrl + src;
+    if (src && !src.includes('logo')) details.cover = src.startsWith('http') ? src : baseUrl + src;
   }
 
   var syn = doc.querySelector('div[class*="synopsis"], div[class*="summary"], p[class*="desc"]');
@@ -170,7 +169,7 @@ async function getMangaDetails(mangaId, invoke) {
   return details;
 }
 
-// 🟢 CORRECTION: getChapters espace le texte et supprime les doublons
+// 🟢 CORRECTION DU TRI : Les chapitres seront toujours dans le bon ordre
 async function getChapters(mangaId, invoke) {
   var html = await invoke('fetch_html', { url: mangaId });
   if (isCloudflare(html)) return [];
@@ -226,7 +225,7 @@ async function getChapters(mangaId, invoke) {
     });
   }
 
-  // Filtre anti-doublons
+  // 1. Filtre anti-doublons
   var uniqueChapters = [];
   var seenIds = new Set();
   chapters.forEach(function(ch) {
@@ -234,6 +233,15 @@ async function getChapters(mangaId, invoke) {
       seenIds.add(ch.id);
       uniqueChapters.push(ch);
     }
+  });
+
+  // 2. 🟢 TRI DÉCROISSANT MATHÉMATIQUE (Règle le bug du chapitre 211 en haut)
+  uniqueChapters.sort(function(a, b) {
+    var numA = parseFloat(a.number);
+    var numB = parseFloat(b.number);
+    if (isNaN(numA)) numA = -1;
+    if (isNaN(numB)) numB = -1;
+    return numB - numA; // Le plus grand numéro passe en premier
   });
 
   return uniqueChapters;
