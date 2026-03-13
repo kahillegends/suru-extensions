@@ -101,31 +101,29 @@ async function getMangaDetails(mangaId, invoke) {
 
 // 4. CHAPITRES
 async function getChapters(mangaId, invoke) {
-  var html = await invoke('fetch_html_rendered', { url: mangaId, waitMs: 5000 });
+  var html = await invoke('fetch_html_rendered', { url: mangaId, waitMs: 6000 });
   if (html === 'TIMEOUT' || html === 'CF_BLOCKED') return [];
 
   var doc = parseDOM(html);
   var chapters = [];
+  var seen = new Set();
 
-  // Sélecteurs larges pour couvrir toutes les structures MangaFire
-  var links = doc.querySelectorAll(
-    '.list-body ul li a, .scroll-sm ul li a, .chapter-list li a, ' +
-    '[class*="chapter"] li a, .manga-detail ul li a'
-  );
-
-  links.forEach(function(a) {
+  // On cherche TOUS les liens <a> de la page qui pointent vers /read/
+  doc.querySelectorAll('a[href*="/read/"]').forEach(function(a) {
     var href = a.getAttribute('href');
     if (!href) return;
-    // Garder uniquement les liens qui ressemblent à un chapitre
-    if (!href.includes('/read/')) return;
-
     var fullHref = href.startsWith('http') ? href : baseUrl + href;
+    if (seen.has(fullHref)) return;
+    seen.add(fullHref);
+
     var titleText = (a.textContent || '').trim().replace(/\s+/g, ' ');
+    if (!titleText) return; // ignorer les liens sans texte
+
     var numMatch = titleText.match(/chapter[\s-]*(\d+(\.\d+)?)/i);
     var num = numMatch ? numMatch[1] : (chapters.length + 1).toString();
 
     chapters.push({
-      id: fullHref,   // L'URL complète sert d'ID pour fetch_chapter_pages
+      id: fullHref,
       title: titleText || 'Chapitre ' + num,
       number: num,
       date: ''
@@ -133,17 +131,7 @@ async function getChapters(mangaId, invoke) {
   });
 
   chapters.reverse();
-
-  var uniqueChapters = [];
-  var seenIds = new Set();
-  chapters.forEach(function(ch) {
-    if (!seenIds.has(ch.id)) {
-      seenIds.add(ch.id);
-      uniqueChapters.push(ch);
-    }
-  });
-
-  return uniqueChapters;
+  return chapters;
 }
 
 // 5. PAGES DU CHAPITRE
