@@ -159,8 +159,8 @@ async function getChapters(mangaId, invoke) {
 // 5. PAGES DU CHAPITRE
 async function getPages(chapterId, invoke) {
   // Extraire l'ID numérique du chapitre depuis l'URL
-  // ex: https://mangafire.to/read/manga-name.abc/en/chapter/123
-  var chapterNumMatch = chapterId.match(/\/chapter\/(\d+)/);
+  // ex: https://mangafire.to/read/manga-name.abc/en/chapter-1
+  var chapterNumMatch = chapterId.match(/chapter-([^/?#]+)/);
   if (!chapterNumMatch) return [];
 
   var chapterNum = chapterNumMatch[1];
