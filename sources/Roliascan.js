@@ -27,35 +27,149 @@ function extractSlug(url) {
 // ────────────────────────────────────────────────────────────
 // SEARCH
 // ────────────────────────────────────────────────────────────
+// RoliaScan utilise une API custom sous /auth/ (mangapeak theme).
+// Exemple observé : https://roliascan.com/auth/hot-searches
 async function search(query, page, invoke) {
   page = page || 0;
-  // RoliaScan n'expose pas de route /search directement parseable en HTML
-  // (tout est JS). Essayons /browse/ avec ?search=
-  var url = baseUrl + '/browse/?search=' + encodeURIComponent(query) + '&page=' + (page + 1);
-  var html = await invoke('fetch_html_rendered', { url: url, waitMs: 4000 });
-  if (isError(html)) return [];
+  var encoded = encodeURIComponent(query);
 
+  // Endpoints candidats sous /auth/ (nouveau base path découvert)
+  var apiCandidates = [
+    baseUrl + '/auth/search?q=' + encoded,
+    baseUrl + '/auth/search?query=' + encoded,
+    baseUrl + '/auth/search?s=' + encoded,
+    baseUrl + '/auth/search?term=' + encoded,
+    baseUrl + '/auth/search-manga?q=' + encoded,
+    baseUrl + '/auth/manga-search?q=' + encoded,
+    baseUrl + '/auth/search/manga?q=' + encoded,
+    baseUrl + '/auth/search?q=' + encoded + '&type=manga',
+    // Fallbacks wp-json au cas où certaines routes existeraient
+    baseUrl + '/wp-json/mangapeak/v1/search?q=' + encoded,
+    baseUrl + '/wp-json/wp/v2/search?search=' + encoded + '&per_page=20'
+  ];
+
+  for (var i = 0; i < apiCandidates.length; i++) {
+    try {
+      var raw = await invoke('fetch_html', { url: apiCandidates[i] });
+      if (isError(raw)) continue;
+      if (!raw || (!raw.trim().startsWith('{') && !raw.trim().startsWith('['))) continue;
+
+      var data = JSON.parse(raw);
+      var results = extractSearchResults(data);
+      if (results.length > 0) {
+        console.log('[ROLIA] ✅ Search API (' + apiCandidates[i] + ') →', results.length, 'résultats');
+        return results;
+      }
+    } catch(e) {}
+  }
+
+  // Fallback : recherche WordPress native via /?s=
+  try {
+    var wpUrl = baseUrl + '/?s=' + encoded + '&post_type=manga';
+    var html = await invoke('fetch_html', { url: wpUrl });
+    if (!isError(html)) {
+      var results2 = parseSearchHtml(html);
+      if (results2.length > 0) {
+        console.log('[ROLIA] ✅ Search via WP /?s= →', results2.length, 'résultats');
+        return results2;
+      }
+    }
+  } catch(e) {}
+
+  // Fallback : page /browse/ avec rendu JS complet
+  try {
+    var browseUrl = baseUrl + '/browse/?search=' + encoded;
+    var html = await invoke('fetch_html_rendered', { url: browseUrl, waitMs: 5000 });
+    if (!isError(html)) {
+      var results3 = parseSearchHtml(html);
+      if (results3.length > 0) {
+        console.log('[ROLIA] ✅ Search via /browse rendu →', results3.length, 'résultats');
+        return results3;
+      }
+    }
+  } catch(e) {}
+
+  console.warn('[ROLIA] ❌ Aucune méthode de recherche n\'a donné de résultats');
+  return [];
+}
+
+// Extrait des résultats depuis un JSON quelconque (API mangapeak / WP / ajax)
+function extractSearchResults(data) {
+  var items = null;
+  if (Array.isArray(data)) items = data;
+  else if (data.results && Array.isArray(data.results)) items = data.results;
+  else if (data.data && Array.isArray(data.data)) items = data.data;
+  else if (data.items && Array.isArray(data.items)) items = data.items;
+  else if (data.mangas && Array.isArray(data.mangas)) items = data.mangas;
+  else if (data.posts && Array.isArray(data.posts)) items = data.posts;
+  else if (data.hits && Array.isArray(data.hits)) items = data.hits;
+
+  if (!items) return [];
+
+  var results = [];
+  items.forEach(function(item) {
+    if (!item || typeof item !== 'object') return;
+
+    // Champs possibles pour le titre
+    var title = item.title || item.name || item.post_title || '';
+    if (typeof title === 'object') title = title.rendered || title.raw || title.romaji || '';
+    if (!title) return;
+
+    // Champs possibles pour l'URL/slug
+    var url = item.url || item.link || item.permalink || item.href || '';
+    if (!url) {
+      var slug = item.slug || item.post_name || '';
+      if (slug) url = baseUrl + '/manga/' + slug + '/';
+    }
+    if (!url) return;
+    if (!url.startsWith('http')) url = baseUrl + (url.startsWith('/') ? url : '/' + url);
+
+    // Filtre : on ne veut que les mangas, pas d'autres post types
+    if (!url.includes('/manga/')) return;
+
+    // Champs possibles pour la cover
+    var cover = item.cover || item.thumbnail || item.image || item.poster || '';
+    if (item.coverImage) cover = typeof item.coverImage === 'string' ? item.coverImage : (item.coverImage.large || item.coverImage.url || '');
+    if (item.featured_image) cover = typeof item.featured_image === 'string' ? item.featured_image : (item.featured_image.url || '');
+    if (item._embedded && item._embedded['wp:featuredmedia'] && item._embedded['wp:featuredmedia'][0]) {
+      cover = item._embedded['wp:featuredmedia'][0].source_url || cover;
+    }
+    if (cover && !cover.startsWith('http')) cover = baseUrl + (cover.startsWith('/') ? cover : '/' + cover);
+
+    results.push({
+      id: url,
+      title: title,
+      cover: cover,
+      source_id: 'roliascan'
+    });
+  });
+  return results;
+}
+
+// Parse une page HTML de résultats de recherche (pour fallback WP /?s=)
+function parseSearchHtml(html) {
   var doc = parseDOM(html);
   var results = [];
   var seen = new Set();
 
-  // Les cartes manga sont des <a href="/manga/{slug}/"> avec une <img> cover
   doc.querySelectorAll('a[href*="/manga/"]').forEach(function(a) {
     var href = a.getAttribute('href') || '';
-    // Filtre : on ne veut que les liens /manga/{slug}/, pas /manga/ tout court
     if (!href.match(/\/manga\/[^/]+\/?$/)) return;
     var fullHref = href.startsWith('http') ? href : baseUrl + (href.startsWith('/') ? href : '/' + href);
     if (seen.has(fullHref)) return;
     seen.add(fullHref);
 
-    var img = a.querySelector('img') || a.closest('article,div,li')?.querySelector('img');
+    var container = a.closest('article, li, div[class*="card"], div[class*="manga"], div[class*="item"]') || a;
+    var img = container.querySelector('img');
     var titleAttr = a.getAttribute('title') || '';
-    var titleEl = a.querySelector('h2,h3,h4,p[class*="title"],span[class*="title"]');
+    var titleEl = container.querySelector('h1, h2, h3, h4, p[class*="title"], span[class*="title"]');
     var title = titleAttr || (titleEl ? titleEl.textContent.trim() : '') || a.textContent.trim();
     if (!title || title.length < 2) return;
 
     var cover = img ? (img.getAttribute('src') || img.getAttribute('data-src') || '') : '';
     if (cover && !cover.startsWith('http')) cover = baseUrl + cover;
+    // Exclure les logos du site
+    if (cover && (cover.includes('logo') || cover.includes('/themes/'))) cover = '';
 
     results.push({
       id: fullHref,
@@ -261,14 +375,17 @@ async function getPages(chapterId, invoke) {
   }
   var numericChapterId = idMatch[1];
 
-  // Liste d'endpoints API candidats (le thème mangapeak peut les exposer
-  // sous différents préfixes selon sa config).
+  // Liste d'endpoints API candidats sous /auth/ (base path découvert dans
+  // les Network calls du site : ex. /auth/hot-searches).
   var apiCandidates = [
-    baseUrl + '/wp-json/mangapeak/v1/chapter-content?chapter_id=' + numericChapterId,
-    baseUrl + '/wp-json/mp/v1/chapter-content?chapter_id=' + numericChapterId,
-    baseUrl + '/wp-admin/admin-ajax.php?action=chapter_content&chapter_id=' + numericChapterId,
-    baseUrl + '/api/chapter-content?chapter_id=' + numericChapterId,
-    baseUrl + '/chapter-content?chapter_id=' + numericChapterId
+    baseUrl + '/auth/chapter-content?chapter_id=' + numericChapterId,
+    baseUrl + '/auth/chapter?id=' + numericChapterId,
+    baseUrl + '/auth/chapter?chapter_id=' + numericChapterId,
+    baseUrl + '/auth/chapter/' + numericChapterId,
+    baseUrl + '/auth/chapter-pages?chapter_id=' + numericChapterId,
+    baseUrl + '/auth/pages?chapter_id=' + numericChapterId,
+    // Fallbacks wp-json au cas où
+    baseUrl + '/wp-json/mangapeak/v1/chapter-content?chapter_id=' + numericChapterId
   ];
 
   for (var i = 0; i < apiCandidates.length; i++) {
