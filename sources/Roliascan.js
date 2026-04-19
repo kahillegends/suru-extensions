@@ -255,16 +255,14 @@ async function search(query, page, invoke) {
 // ────────────────────────────────────────────────────────────
 // GET POPULAR (homepage)
 // ────────────────────────────────────────────────────────────
-// Page 0 : le HTML de /home contient déjà ~30 manga dans des sections
-//          (featured, recently added, completed/hot). Parsing DOM direct.
-// Page 1+ : on tente l'API /auth/ paginée. Si elle n'existe pas, on renvoie []
-//           pour arrêter proprement au lieu de rejouer /home/ en boucle.
+// Page 0 : le HTML de /home contient déjà ~30 manga directement (server-rendered)
+// Page 1+ : /home ne pagine pas. /browse/ est un SPA qui charge le contenu en
+//           AJAX après render. On utilise fetch_html_rendered (Chromium) pour
+//           que le JS s'exécute et peuple le DOM, puis on parse les cartes.
 async function getPopular(page, invoke) {
   page = page || 0;
 
   if (page === 0) {
-    // Le HTML brut de /home/ contient les manga sans besoin de rendu JS.
-    // Mais on utilise fetch_html_rendered par sécurité (CF, lazy-loading).
     var url = baseUrl + '/home/';
     var html = await invoke('fetch_html', { url: url });
     if (isError(html)) {
@@ -276,17 +274,22 @@ async function getPopular(page, invoke) {
     return results;
   }
 
-  // Pages >= 1 : essayer API paginée. Sans auth, ces endpoints peuvent être
-  // rate-limités ou 404. On essaie, puis on abandonne si rien ne répond.
+  // Page 1+ : on essaie d'abord les endpoints API /auth/ paginés qui pourraient
+  // renvoyer du JSON (rapide, pas de rendu Chromium nécessaire).
   var apiCandidates = [
     baseUrl + '/auth/comics?page=' + page + '&sort=latest',
     baseUrl + '/auth/comics?page=' + page,
+    baseUrl + '/auth/manga?page=' + page + '&sort=latest',
+    baseUrl + '/auth/manga?page=' + page,
     baseUrl + '/auth/browse?page=' + page + '&sort=latest',
     baseUrl + '/auth/browse?page=' + page,
-    baseUrl + '/auth/manga?page=' + page,
     baseUrl + '/auth/home?page=' + page,
     baseUrl + '/auth/latest?page=' + page,
     baseUrl + '/auth/popular?page=' + page,
+    baseUrl + '/auth/list?page=' + page,
+    baseUrl + '/auth/list-manga?page=' + page,
+    baseUrl + '/auth/recent?page=' + page,
+    baseUrl + '/auth/recently-added?page=' + page,
   ];
 
   for (var i = 0; i < apiCandidates.length; i++) {
@@ -297,15 +300,37 @@ async function getPopular(page, invoke) {
       if (data.success === false) continue;
       var r = extractSearchResults(data);
       if (r.length > 0) {
-        console.log('[ROLIA] getPopular(' + page + ') via ' + apiCandidates[i] + ' →', r.length);
+        console.log('[ROLIA] getPopular(' + page + ') API ' + apiCandidates[i] + ' →', r.length);
         return r;
       }
     } catch(e) {}
   }
 
-  // ⛔ Important : renvoyer vide ici évite la boucle "voir plus → mêmes manga".
-  // Le front affichera "fin de la liste" au lieu de redemander page+1.
-  console.log('[ROLIA] getPopular(' + page + ') : pas de pagination disponible → []');
+  // Aucun endpoint API n'a répondu utilement → on passe au rendu JS de /browse/.
+  // Chromium exécute le JS qui peuple la grille, on attend longtemps (8s) et on
+  // parse le DOM résultant. Plusieurs paramètres d'URL tentés au cas où le SPA
+  // utilise un schéma différent (page / p / offset / permalink).
+  var renderedCandidates = [
+    baseUrl + '/browse/?page=' + (page + 1) + '&sort=latest',
+    baseUrl + '/browse/?page=' + page + '&sort=latest',
+    baseUrl + '/browse/?p=' + (page + 1) + '&sort=latest',
+    baseUrl + '/browse/page/' + (page + 1) + '/',
+    baseUrl + '/browse/?offset=' + (page * 30) + '&sort=latest',
+  ];
+
+  for (var j = 0; j < renderedCandidates.length; j++) {
+    try {
+      var html = await invoke('fetch_html_rendered', { url: renderedCandidates[j], waitMs: 8000 });
+      if (isError(html)) continue;
+      var r2 = parseSearchHtml(html);
+      if (r2.length > 0) {
+        console.log('[ROLIA] getPopular(' + page + ') rendu ' + renderedCandidates[j] + ' →', r2.length);
+        return r2;
+      }
+    } catch(e) {}
+  }
+
+  console.log('[ROLIA] getPopular(' + page + ') : pagination non disponible → []');
   return [];
 }
 
