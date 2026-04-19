@@ -1,4 +1,10 @@
 // Extension SushiScan pour SORU
+// ✅ FIX covers non affichées : SushiScan utilise le thème Madara avec lazy-load.
+//   L'attribut `src` contient un placeholder 1x1 (data:image/... ou gif) ; la
+//   vraie URL est dans `data-lazy-src`, `data-src`, `srcset`, ou `data-cfsrc`.
+//   L'ancien code prenait `src` en priorité → toujours le placeholder.
+//   Maintenant on regarde tous les attributs possibles et on écarte les data: URI.
+
 var baseUrl = 'https://sushiscan.net';
 
 function fetchHTML(url, invoke) {
@@ -19,6 +25,45 @@ function isCloudflare(html) {
   return false;
 }
 
+// 🟢 Récupère la VRAIE URL d'image depuis un tag <img>, en ignorant les
+// placeholders inline (data:, gif 1x1, etc.). Gère l'ordre des attributs
+// lazy-load les plus courants sur WordPress/Madara.
+function extractImgUrl(img) {
+  if (!img) return '';
+  // Ordre : attributs lazy (vraies URLs) d'abord, src en dernier (placeholder)
+  var candidates = [
+    img.getAttribute('data-lazy-src'),
+    img.getAttribute('data-src'),
+    img.getAttribute('data-original'),
+    img.getAttribute('data-cfsrc'),
+    img.getAttribute('data-setbg'),
+    img.getAttribute('src'),
+  ];
+  // srcset : on prend la première URL (plus haute résolution généralement)
+  var srcset = img.getAttribute('data-lazy-srcset') || img.getAttribute('srcset') || '';
+  if (srcset) {
+    var first = srcset.split(',')[0].trim().split(/\s+/)[0];
+    if (first) candidates.unshift(first);
+  }
+  for (var i = 0; i < candidates.length; i++) {
+    var u = candidates[i];
+    if (!u || typeof u !== 'string') continue;
+    u = u.trim();
+    if (!u) continue;
+    // Exclure data: URI (placeholders 1x1) et chaînes trop courtes
+    if (u.startsWith('data:')) continue;
+    if (u.length < 10) continue;
+    // Si relatif → préfixer
+    if (!u.startsWith('http') && !u.startsWith('//')) {
+      if (u.startsWith('/')) u = baseUrl + u;
+      else continue; // URL relative non-root, trop ambigu
+    }
+    if (u.startsWith('//')) u = 'https:' + u;
+    return u;
+  }
+  return '';
+}
+
 async function getPopular(page, invoke) {
   page = page || 0;
   var url = baseUrl + '/catalogue/?page=' + (page + 1) + '&order=popular';
@@ -34,7 +79,7 @@ async function getPopular(page, invoke) {
     results.push({
       id: a.getAttribute('href') || '',
       title: (title ? title.textContent : '').trim(),
-      cover: (img ? (img.getAttribute('src') || img.getAttribute('data-src')) : '') || '',
+      cover: extractImgUrl(img),
       source_id: 'sushiscan'
     });
   });
@@ -56,7 +101,7 @@ async function search(query, page, invoke) {
     results.push({
       id: a.getAttribute('href') || '',
       title: (title ? title.textContent : '').trim(),
-      cover: (img ? (img.getAttribute('src') || img.getAttribute('data-src')) : '') || '',
+      cover: extractImgUrl(img),
       source_id: 'sushiscan'
     });
   });
@@ -72,7 +117,7 @@ async function getMangaDetails(mangaId, invoke) {
   var title = titleEl ? titleEl.textContent.trim() : '';
 
   var coverEl = doc.querySelector('.thumbook img') || doc.querySelector('.thumb img');
-  var cover = coverEl ? (coverEl.getAttribute('src') || coverEl.getAttribute('data-src') || '') : '';
+  var cover = extractImgUrl(coverEl);
 
   var synopsisEl = doc.querySelector('.entry-content p') || doc.querySelector('[itemprop="description"]') || doc.querySelector('.synops');
   var synopsis = synopsisEl ? synopsisEl.textContent.trim() : '';
@@ -159,7 +204,9 @@ async function getPages(chapterId, invoke) {
 
   if (pages.length === 0) {
     doc.querySelectorAll('#readerarea img').forEach(function(img) {
-      var src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || '';
+      // 🟢 Même fix ici : extractImgUrl au lieu de src brut, pour les pages
+      // lazy-loaded dans le reader.
+      var src = extractImgUrl(img);
       if (src && src.startsWith('http') && !src.includes('lazyload')) {
         pages.push(src.replace('http://', 'https://'));
       }
