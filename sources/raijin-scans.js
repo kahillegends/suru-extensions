@@ -245,12 +245,19 @@ async function getPopular(page, invoke) {
     return results;
   }
 
-  // Page 1+ : essai des URLs Madara standard
+  // Page 1+ : essai des URLs paginées Madara/WordPress.
+  // ⚠️ Madara WP utilise `?paged=N` (convention WP), pas `?page=N`.
+  // 🟢 Anti-spam : si une URL ramène moins de MIN_FOR_VALID résultats, on la
+  // rejette — c'est probablement une page d'erreur Madara qui contient juste
+  // 1-2 cards de suggestion (genre la "404 not found" custom du thème).
+  // Sans ce filtre, "Charger plus" affichait juste 1 webtoon en boucle.
+  var MIN_FOR_VALID = 5;
   var candidates = [
-    baseUrl + '/manga/?m_orderby=trending&page=' + (page + 1),
+    baseUrl + '/manga/?paged=' + (page + 1) + '&m_orderby=trending',
     baseUrl + '/manga/page/' + (page + 1) + '/?m_orderby=trending',
+    baseUrl + '/manga/?paged=' + (page + 1),
+    baseUrl + '/manga/page/' + (page + 1) + '/',
     baseUrl + '/page/' + (page + 1) + '/?post_type=wp-manga&m_orderby=views',
-    baseUrl + '/manga/?page=' + (page + 1),
     baseUrl + '/page/' + (page + 1) + '/?post_type=wp-manga',
   ];
 
@@ -259,9 +266,12 @@ async function getPopular(page, invoke) {
       var html2 = await fetchHTML(candidates[i], invoke);
       if (isError(html2)) continue;
       var r = parseMangaList(html2);
-      if (r.length > 0) {
+      if (r.length >= MIN_FOR_VALID) {
         console.log('[RAIJIN] getPopular(' + page + ') via ' + candidates[i] + ' →', r.length);
         return r;
+      } else if (r.length > 0) {
+        console.log('[RAIJIN] getPopular(' + page + ') ' + candidates[i] +
+                    ' : seulement ' + r.length + ' (< ' + MIN_FOR_VALID + ', rejeté)');
       }
     } catch(e) {}
   }
