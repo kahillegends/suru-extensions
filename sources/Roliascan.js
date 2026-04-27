@@ -118,10 +118,15 @@ function extractSearchResults(data) {
 }
 
 // Parse une page HTML (home, browse, résultats WP) et extrait les liens /manga/
+// 🟢 Anti-spam : dédup par SLUG (pas par URL complète) + détection du cas
+// pathologique où le SPA rend toutes ses cards avec le même placeholder
+// (ex. quand /browse/?page=N est appelé mais que le SPA n'a pas encore fini
+// son AJAX → toutes les cards montrent la même cover Dr. Stone par défaut).
 function parseSearchHtml(html) {
   var doc = parseDOM(html);
   var results = [];
-  var seen = new Set();
+  var seenSlugs = new Set();
+  var slugCounts = {}; // pour détection de spam
 
   doc.querySelectorAll('a[href*="/manga/"]').forEach(function(a) {
     var href = a.getAttribute('href') || '';
@@ -129,8 +134,16 @@ function parseSearchHtml(html) {
     if (!href.match(/\/manga\/[^/?#]+\/?$/)) return;
 
     var fullHref = href.startsWith('http') ? href : baseUrl + (href.startsWith('/') ? href : '/' + href);
-    if (seen.has(fullHref)) return;
-    seen.add(fullHref);
+
+    // Extraire le slug pour dédup robuste : /manga/dr-stone/ et
+    // /manga/dr-stone?ref=... pointent vers la même série, on les compte une fois.
+    var slugMatch = fullHref.match(/\/manga\/([^/?#]+)/);
+    if (!slugMatch) return;
+    var slug = slugMatch[1].toLowerCase();
+    slugCounts[slug] = (slugCounts[slug] || 0) + 1;
+
+    if (seenSlugs.has(slug)) return;
+    seenSlugs.add(slug);
 
     // Conteneur : on essaie de trouver la card parente pour extraire titre + cover
     var container = a.closest('article, li, div[class*="card"], div[class*="manga"], div[class*="item"], div[class*="entry"]')
@@ -165,6 +178,24 @@ function parseSearchHtml(html) {
       source_id: 'roliascan'
     });
   });
+
+  // 🟢 Détection de spam : si une seule série apparaît dans plus de 30% des
+  // cards brutes (avant dédup), c'est que le SPA est dans un état où il rend
+  // toutes ses cards en attente avec la même cover par défaut. On jette tout.
+  // Seuil bas (6 cards minimum) pour pas faux-positiver sur les petites pages.
+  var totalCards = 0;
+  var maxCount = 0;
+  var maxSlug = '';
+  for (var k in slugCounts) {
+    totalCards += slugCounts[k];
+    if (slugCounts[k] > maxCount) { maxCount = slugCounts[k]; maxSlug = k; }
+  }
+  if (totalCards >= 6 && maxCount / totalCards > 0.3) {
+    console.warn('[ROLIA] ⚠️  Spam détecté : "' + maxSlug + '" apparaît ' + maxCount +
+      '/' + totalCards + ' fois (' + Math.round(maxCount / totalCards * 100) + '%). ' +
+      'Le SPA n\'a probablement pas fini de charger ses cards. → []');
+    return [];
+  }
 
   return results;
 }
@@ -307,20 +338,19 @@ async function getPopular(page, invoke) {
   }
 
   // Aucun endpoint API n'a répondu utilement → on passe au rendu JS de /browse/.
-  // Chromium exécute le JS qui peuple la grille, on attend longtemps (8s) et on
-  // parse le DOM résultant. Plusieurs paramètres d'URL tentés au cas où le SPA
-  // utilise un schéma différent (page / p / offset / permalink).
+  // Chromium exécute le JS qui peuple la grille. On attend longuement (12s) car
+  // RoliaScan a des cards avec placeholder par défaut qui prennent du temps à
+  // être remplacées par leur vrai contenu. Si le rendu est encore en placeholder
+  // au moment où on capture, parseSearchHtml détectera le spam et renverra [].
   var renderedCandidates = [
     baseUrl + '/browse/?page=' + (page + 1) + '&sort=latest',
     baseUrl + '/browse/?page=' + page + '&sort=latest',
-    baseUrl + '/browse/?p=' + (page + 1) + '&sort=latest',
     baseUrl + '/browse/page/' + (page + 1) + '/',
-    baseUrl + '/browse/?offset=' + (page * 30) + '&sort=latest',
   ];
 
   for (var j = 0; j < renderedCandidates.length; j++) {
     try {
-      var html = await invoke('fetch_html_rendered', { url: renderedCandidates[j], waitMs: 8000 });
+      var html = await invoke('fetch_html_rendered', { url: renderedCandidates[j], waitMs: 12000 });
       if (isError(html)) continue;
       var r2 = parseSearchHtml(html);
       if (r2.length > 0) {
