@@ -34,6 +34,9 @@ function isError(html) {
 }
 
 // Récupère la vraie URL d'image en contournant le lazy-loading (Madara/WP)
+// 🟢 Étendu pour supporter les `style="background-image: url(...)"` car le
+// thème custom Raijin utilise parfois un <div> avec background-image au lieu
+// d'un <img> classique pour les covers de leurs cards.
 function extractImgUrl(img) {
   if (!img) return '';
   var candidates = [
@@ -42,12 +45,20 @@ function extractImgUrl(img) {
     img.getAttribute('data-original'),
     img.getAttribute('data-cfsrc'),
     img.getAttribute('data-setbg'),
+    img.getAttribute('data-bg'),
+    img.getAttribute('data-image'),
     img.getAttribute('src')
   ];
   var srcset = img.getAttribute('data-lazy-srcset') || img.getAttribute('srcset') || '';
   if (srcset) {
     var first = srcset.split(',')[0].trim().split(/\s+/)[0];
     if (first) candidates.unshift(first);
+  }
+  // Background-image inline style
+  var style = img.getAttribute('style') || '';
+  if (style) {
+    var bgMatch = style.match(/background-image\s*:\s*url\(['"]?([^'")]+)['"]?\)/i);
+    if (bgMatch) candidates.unshift(bgMatch[1]);
   }
   for (var i = 0; i < candidates.length; i++) {
     var u = candidates[i];
@@ -60,6 +71,32 @@ function extractImgUrl(img) {
     }
     if (u.startsWith('//')) u = 'https:' + u;
     return u;
+  }
+  return '';
+}
+
+// Cherche aussi un background-image dans un container parent (cards Raijin
+// utilisent parfois <div class="cover" style="background-image:...">)
+function extractCoverFromContainer(container) {
+  if (!container) return '';
+  // 1. Essai via <img> classique
+  var img = container.querySelector('img');
+  var fromImg = extractImgUrl(img);
+  if (fromImg) return fromImg;
+
+  // 2. Essai via background-image sur n'importe quel élément du container
+  var elsWithBg = container.querySelectorAll('[style*="background-image"], [style*="background:"]');
+  for (var i = 0; i < elsWithBg.length; i++) {
+    var style = elsWithBg[i].getAttribute('style') || '';
+    var m = style.match(/url\(['"]?([^'")]+)['"]?\)/i);
+    if (m && m[1]) {
+      var u = m[1].trim();
+      if (u && !u.startsWith('data:') && u.length > 10) {
+        if (u.startsWith('//')) u = 'https:' + u;
+        if (!u.startsWith('http')) u = absoluteUrl(u);
+        return u;
+      }
+    }
   }
   return '';
 }
@@ -82,13 +119,26 @@ function parseMangaList(html) {
   var results = [];
   var seenSlugs = new Set();
 
-  // Mots-clés génériques à rejeter pour le titre (le thème custom Raijin
-  // colle parfois juste "Manhwa" / "Manga" en tant que titre dans les cards).
-  var GENERIC = ['manhwa', 'manhua', 'manga', 'webtoon', 'comic', 'comics', 'series'];
+  var GENERIC = ['manhwa', 'manhua', 'manga', 'webtoon', 'comic', 'comics', 'series', 'en cours', 'terminé', 'completed', 'ongoing'];
   function isGeneric(t) {
     if (!t) return true;
     var lc = t.trim().toLowerCase();
     return GENERIC.indexOf(lc) >= 0 || lc.length < 3;
+  }
+
+  // 🟢 Nettoie un titre candidat de tout le bruit : numéros de chapitre,
+  // dates, badges, ET surtout les IDs WordPress qui sortent en suffixe
+  // (ex. "Murim Login 639187" → "Murim Login").
+  function cleanTitle(t) {
+    if (!t) return '';
+    return t
+      .split('\n')[0]
+      .replace(/\s+/g, ' ')
+      .replace(/^(Ch\.?\s*\d+\s*)+/i, '')        // "Ch. 12 ..."
+      .replace(/(New|Premium|HOT|UP)\s*$/i, '')  // badges en fin
+      .replace(/\s+\d{5,}\s*$/, '')              // ID WordPress en suffixe (5+ chiffres)
+      .replace(/^\d+\s+/, '')                    // numéro de ranking en préfixe
+      .trim();
   }
 
   doc.querySelectorAll('a[href*="/manga/"]').forEach(function(a) {
@@ -101,44 +151,42 @@ function parseMangaList(html) {
 
     var fullHref = absoluteUrl(href);
 
-    var container = a.closest('article, li, div[class*="card"], div[class*="manga"], div[class*="item"], div[class*="entry"], .page-item-detail, .c-tabs-item__content')
+    var container = a.closest('article, li, div[class*="card"], div[class*="manga"], div[class*="item"], div[class*="entry"], .page-item-detail, .c-tabs-item__content, .swiper-slide')
                  || a.parentElement
                  || a;
 
     var img = container.querySelector('img');
 
-    // 🟢 Stratégie de titre robuste : on essaie plusieurs sources et on
-    // refuse les titres génériques. Priorité : alt de l'image (Madara met
-    // le vrai titre dedans) → attribut title du <a> → .post-title → texte du <a>
+    // Stratégie de titre : on collecte tous les candidats, on les nettoie,
+    // on garde le premier qui n'est ni générique ni un numéro de chapitre.
     var candidates = [];
-    if (img) candidates.push(img.getAttribute('alt') || '');
-    candidates.push(a.getAttribute('title') || '');
+    if (img) candidates.push(img.getAttribute('alt'));
+    candidates.push(a.getAttribute('title'));
     var titleEl = container.querySelector('.post-title, .tt, h1, h2, h3, h4, h5, .manga-title');
-    if (titleEl) candidates.push(titleEl.textContent.trim());
-    candidates.push(a.textContent.trim());
+    if (titleEl) candidates.push(titleEl.textContent);
+    candidates.push(a.textContent);
 
     var title = '';
     for (var i = 0; i < candidates.length; i++) {
-      var c = (candidates[i] || '')
-        .split('\n')[0]
-        .replace(/\s+/g, ' ')
-        .replace(/^(Ch\.?\s*\d+\s*)+/i, '')
-        .replace(/(New|Premium|HOT|UP)\s*$/i, '')
-        .trim();
+      var c = cleanTitle(candidates[i]);
       if (c && !isGeneric(c) && !/^ch(?:apitre|apter)?\.?\s*\d+/i.test(c)) {
         title = c;
         break;
       }
     }
 
-    // Dernier recours : reconstituer depuis le slug
-    if (!title) {
-      title = slug.replace(/-/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
-    }
+    // 🟢 SI aucun titre utilisable n'est trouvé, on REJETTE la card.
+    // C'est mieux que d'afficher une carte sans rien (avec juste "En cours"
+    // qui vient de l'UI SORU). Le user verra moins de cards mais elles
+    // auront toutes un titre lisible.
+    if (!title) return;
 
-    var cover = extractImgUrl(img);
+    // Cover : <img>, srcset, lazy-load, OU background-image dans le container
+    var cover = extractCoverFromContainer(container);
     // Filtrer les placeholders (drapeau coréen, logo, etc.)
-    if (cover && /placeholder|drapeau|flag|default|logo/i.test(cover)) cover = '';
+    if (cover && /placeholder|drapeau|flag|default|\/logo|\/themes\/|favicon/i.test(cover)) {
+      cover = '';
+    }
 
     results.push({
       id: fullHref,
@@ -288,13 +336,21 @@ async function getMangaDetails(mangaId, invoke) {
   // ou si elle pointe vers le logo du site
   function isPlaceholderCover(c) {
     if (!c) return true;
-    return /placeholder|logo|default|no-image|drapeau|flag/i.test(c);
+    return /placeholder|logo|default|no-image|drapeau|flag|\/themes\/|favicon/i.test(c);
   }
   if (isPlaceholderCover(cover)) {
+    // Essai 1 : sélecteurs Madara/MangaStream classiques
     var coverEl = doc.querySelector('.summary_image img, .manga-info-pic img, .thumb img, .thumbook img, .tab-summary img');
-    if (coverEl) {
-      var fromDom = extractImgUrl(coverEl);
-      if (fromDom && !isPlaceholderCover(fromDom)) cover = fromDom;
+    var fromDom = extractImgUrl(coverEl);
+    if (fromDom && !isPlaceholderCover(fromDom)) {
+      cover = fromDom;
+    } else {
+      // Essai 2 : background-image sur le container de detail
+      var detailContainer = doc.querySelector('.summary_image, .manga-info, .post-content, .detail-content, .entry-content');
+      if (detailContainer) {
+        var fromBg = extractCoverFromContainer(detailContainer);
+        if (fromBg && !isPlaceholderCover(fromBg)) cover = fromBg;
+      }
     }
   }
   details.cover = cover;
