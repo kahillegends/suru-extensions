@@ -202,26 +202,71 @@ function parseMangaList(html) {
 // ────────────────────────────────────────────────────────────
 // SEARCH
 // ────────────────────────────────────────────────────────────
+// Stratégie multi-URL : Raijin utilise un thème custom WordPress, donc le
+// `post_type=wp-manga` standard de Madara ne marche pas toujours (leur
+// custom post type peut avoir un autre nom). On essaie plusieurs variantes
+// et on FUSIONNE les résultats — ça maximise la couverture.
 async function search(query, page, invoke) {
   page = page || 0;
   if (!query || typeof query !== 'string') return [];
+  var encoded = encodeURIComponent(query);
 
-  // Recherche WordPress standard (Madara accepte post_type=wp-manga)
-  var url = baseUrl + '/page/' + (page + 1) + '/?s=' + encodeURIComponent(query) + '&post_type=wp-manga';
-  var html = await fetchHTML(url, invoke);
+  // URLs candidates : du plus spécifique au plus permissif. On les essaie
+  // toutes pour la page demandée et on fusionne les résultats.
+  var urls = [
+    baseUrl + '/page/' + (page + 1) + '/?s=' + encoded + '&post_type=wp-manga',
+    baseUrl + '/page/' + (page + 1) + '/?s=' + encoded + '&post_type=manga',
+    baseUrl + '/page/' + (page + 1) + '/?s=' + encoded,
+  ];
+  // Page 0 : ajouter aussi la recherche simple sans pagination
+  if (page === 0) {
+    urls.unshift(baseUrl + '/?s=' + encoded);
+  }
 
-  if (isError(html)) {
-    // Retry avec rendu JS si CF bloque
-    html = await invoke('fetch_html_rendered', { url: url, waitMs: 5000 });
+  var allResults = [];
+  var seenSlugs = new Set();
+  var anyCfBlocked = false;
+
+  for (var i = 0; i < urls.length; i++) {
+    var html;
+    try {
+      html = await fetchHTML(urls[i], invoke);
+    } catch(e) { continue; }
+
     if (isError(html)) {
-      // Cloudflare carrément persistant → erreur explicite
-      return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
+      // Si Cloudflare bloque sur cette URL, on retry en JS rendu
+      try {
+        html = await invoke('fetch_html_rendered', { url: urls[i], waitMs: 5000 });
+      } catch(e) { continue; }
+      if (isError(html)) {
+        anyCfBlocked = true;
+        continue;
+      }
+    }
+
+    var partial = parseMangaList(html);
+    var addedFromThis = 0;
+    partial.forEach(function(item) {
+      var slugMatch = item.id.match(/\/manga\/([a-z0-9-]+)/i);
+      var slug = slugMatch ? slugMatch[1] : item.id;
+      if (seenSlugs.has(slug)) return;
+      seenSlugs.add(slug);
+      allResults.push(item);
+      addedFromThis++;
+    });
+
+    if (addedFromThis > 0) {
+      console.log('[RAIJIN] search via ' + urls[i] + ' → +' + addedFromThis + ' (total: ' + allResults.length + ')');
     }
   }
 
-  var results = parseMangaList(html);
-  console.log('[RAIJIN] search("' + query + '") page=' + page + ' →', results.length);
-  return results;
+  // Si toutes les URLs ont été bloquées par CF et zéro résultat → erreur explicite
+  if (allResults.length === 0 && anyCfBlocked) {
+    return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
+  }
+
+  console.log('[RAIJIN] search("' + query + '") page=' + page + ' →', allResults.length, 'résultats uniques');
+  return allResults;
 }
 
 // ────────────────────────────────────────────────────────────
