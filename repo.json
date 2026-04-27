@@ -40,5 +40,11 @@
     "version": "1.0.0",
     "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/raijin-scans.js",
     "icon_url": "https://raijin-scans.fr/favicon.ico"
-  }
+  },
+  {
+  "id": "webtoons",
+  "name": "Webtoons",
+  "version": "1.0.0",
+  "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/webtoons.js"
+}
 ]
