@@ -116,10 +116,14 @@ async function search(query, page, invoke) {
   // On renvoie [] pour les pages > 0 → pas de "voir plus" infini.
   if (page > 0) return [];
 
+  // 🟢 Le HTML de /en/search rendu côté serveur contient parfois 0 carte
+  // — les résultats sont peuplés en JS. On utilise directement fetch_html_rendered
+  // pour laisser Chromium exécuter le JS de la page.
   var url = baseUrl + '/' + lang + '/search?keyword=' + encodeURIComponent(query);
-  var html = await invoke('fetch_html', { url: url });
+  var html = await invoke('fetch_html_rendered', { url: url, waitMs: 5000 });
   if (isError(html)) {
-    html = await invoke('fetch_html_rendered', { url: url, waitMs: 4000 });
+    // Fallback sur le HTML brut au cas où
+    html = await invoke('fetch_html', { url: url });
     if (isError(html)) return [];
   }
 
@@ -241,6 +245,10 @@ async function getMangaDetails(mangaId, invoke) {
 // ────────────────────────────────────────────────────────────
 // Webtoons pagine sa liste d'épisodes (~10 par page). On boucle sur les pages
 // jusqu'à ce qu'on ait tout, ou jusqu'à hit un cap de sécurité (50 pages).
+//
+// 🟢 IMPORTANT : on utilise fetch_html_rendered partout parce que le HTML
+// brut renvoyé par Webtoons ne contient pas toujours #_listUl peuplé. Le
+// rendu JS garantit qu'on récupère les vraies cards d'épisodes.
 async function getChapters(mangaId, invoke) {
   var allChapters = [];
   var seen = new Set();
@@ -253,37 +261,35 @@ async function getChapters(mangaId, invoke) {
 
   // Construit l'URL de pagination en preservant le path original
   function pageUrl(p) {
-    // Si l'URL contient déjà ?page=, on remplace ; sinon on append.
-    var sep = mangaId.includes('?') ? '&' : '?';
-    var stripped = mangaId.replace(/&page=\d+/g, '').replace(/\?page=\d+/g, sep === '?' ? '?' : '');
-    return stripped + (stripped.includes('?') ? '&' : '?') + 'page=' + p;
+    // On retire toute occurrence existante de page= puis on ajoute la nouvelle
+    var clean = mangaId.replace(/[?&]page=\d+/g, '');
+    return clean + (clean.includes('?') ? '&' : '?') + 'page=' + p;
   }
 
   for (var p = 1; p <= maxPages; p++) {
     var url = pageUrl(p);
     var html;
     try {
-      html = await invoke('fetch_html', { url: url });
+      // Rendu JS systématique : Webtoons exige du JS pour peupler #_listUl
+      html = await invoke('fetch_html_rendered', { url: url, waitMs: 3000 });
     } catch(e) { break; }
     if (isError(html)) {
-      // Sur erreur réseau, on tente une fois en rendu JS, puis on abandonne
-      if (p === 1) {
-        try { html = await invoke('fetch_html_rendered', { url: url, waitMs: 3000 }); }
-        catch(e) { break; }
-        if (isError(html)) break;
-      } else break;
+      // Fallback sur le HTML brut, sinon on abandonne
+      try { html = await invoke('fetch_html', { url: url }); }
+      catch(e) { break; }
+      if (isError(html)) break;
     }
 
     var doc = parseDOM(html);
     var newOnPage = 0;
 
-    // Sélecteur principal : #_listUl li a
-    // Fallback : a[href*="/viewer?title_no="]
-    var nodes = doc.querySelectorAll('#_listUl li a, a[href*="/viewer?title_no="]');
+    // 🟢 Sélecteur ultra-permissif : tous les liens vers /viewer?title_no=X
+    // peu importe le wrapper (a, li, div). On filtre ensuite par title_no.
+    var nodes = doc.querySelectorAll('a[href*="/viewer?title_no="], a[href*="viewer?title_no="]');
 
     nodes.forEach(function(a) {
       var href = a.getAttribute('href') || '';
-      if (!href.includes('/viewer?title_no=')) return;
+      if (!href.includes('viewer?title_no=')) return;
       var fullHref = absoluteUrl(href);
 
       // Match le bon title_no pour éviter les contaminations (ex. "stories liées")
@@ -320,6 +326,8 @@ async function getChapters(mangaId, invoke) {
       });
       newOnPage++;
     });
+
+    console.log('[WEBTOONS] page=' + p + ' → ' + newOnPage + ' nouveaux épisodes (total: ' + allChapters.length + ')');
 
     // Si la page n'a apporté aucun nouveau chapitre, c'est qu'on a dépassé
     // la dernière page de pagination → on s'arrête.
