@@ -202,48 +202,39 @@ function parseMangaList(html) {
 // ────────────────────────────────────────────────────────────
 // SEARCH
 // ────────────────────────────────────────────────────────────
-// Stratégie multi-URL : Raijin utilise un thème custom WordPress, donc le
-// `post_type=wp-manga` standard de Madara ne marche pas toujours (leur
-// custom post type peut avoir un autre nom). On essaie plusieurs variantes
-// et on FUSIONNE les résultats — ça maximise la couverture.
+// 🟢 Stratégie : 2 URLs candidates seulement, fetchées EN PARALLÈLE.
+// Avant : 4 URLs séquentielles × 5s/URL via FlareSolverr = 20+s, timeout côté UI.
+// Maintenant : 2 URLs en parallèle = max ~5-7s. Plus fiable et plus rapide.
 async function search(query, page, invoke) {
   page = page || 0;
   if (!query || typeof query !== 'string') return [];
   var encoded = encodeURIComponent(query);
 
-  // URLs candidates : du plus spécifique au plus permissif. On les essaie
-  // toutes pour la page demandée et on fusionne les résultats.
+  // Les 2 URLs qui ont le plus de chances de retourner des résultats :
+  //  1. WordPress search standard (sans filtre post_type → plus permissif)
+  //  2. Pagination Madara classique (au cas où le user demande page 2+)
   var urls = [
-    baseUrl + '/page/' + (page + 1) + '/?s=' + encoded + '&post_type=wp-manga',
-    baseUrl + '/page/' + (page + 1) + '/?s=' + encoded + '&post_type=manga',
     baseUrl + '/page/' + (page + 1) + '/?s=' + encoded,
   ];
-  // Page 0 : ajouter aussi la recherche simple sans pagination
+  // Page 0 : on tente aussi la racine (souvent plus rapide et plus complète)
   if (page === 0) {
     urls.unshift(baseUrl + '/?s=' + encoded);
   }
 
+  // Fetch parallèle — on attend tous les résultats et on les fusionne
+  var promises = urls.map(function(url) {
+    return fetchHTML(url, invoke).catch(function() { return null; });
+  });
+  var htmls = await Promise.all(promises);
+
   var allResults = [];
   var seenSlugs = new Set();
-  var anyCfBlocked = false;
+  var anyValid = false;
 
-  for (var i = 0; i < urls.length; i++) {
-    var html;
-    try {
-      html = await fetchHTML(urls[i], invoke);
-    } catch(e) { continue; }
-
-    if (isError(html)) {
-      // Si Cloudflare bloque sur cette URL, on retry en JS rendu
-      try {
-        html = await invoke('fetch_html_rendered', { url: urls[i], waitMs: 5000 });
-      } catch(e) { continue; }
-      if (isError(html)) {
-        anyCfBlocked = true;
-        continue;
-      }
-    }
-
+  for (var i = 0; i < htmls.length; i++) {
+    var html = htmls[i];
+    if (!html || isError(html)) continue;
+    anyValid = true;
     var partial = parseMangaList(html);
     var addedFromThis = 0;
     partial.forEach(function(item) {
@@ -254,14 +245,13 @@ async function search(query, page, invoke) {
       allResults.push(item);
       addedFromThis++;
     });
-
     if (addedFromThis > 0) {
-      console.log('[RAIJIN] search via ' + urls[i] + ' → +' + addedFromThis + ' (total: ' + allResults.length + ')');
+      console.log('[RAIJIN] search ' + urls[i] + ' → +' + addedFromThis);
     }
   }
 
-  // Si toutes les URLs ont été bloquées par CF et zéro résultat → erreur explicite
-  if (allResults.length === 0 && anyCfBlocked) {
+  // Si TOUTES les URLs ont échoué (CF persistant) → erreur explicite
+  if (!anyValid) {
     return [{ id: 'cf-error', title: 'Cloudflare bloqué', cover: '' }];
   }
 
