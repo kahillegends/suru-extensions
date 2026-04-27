@@ -293,7 +293,6 @@ async function getChapters(mangaId, invoke) {
       console.log('[WEBTOONS] <a> avec "viewer":', viewerLinks.length);
       console.log('[WEBTOONS] <a> avec "title_no=":', titleNoLinks.length);
       console.log('[WEBTOONS] #_listUl présent:', listUlEl !== null);
-      // Dump le 1er lien viewer trouvé pour voir le format réel
       if (viewerLinks.length > 0) {
         var first = viewerLinks[0];
         console.log('[WEBTOONS] 1er lien viewer href:', first.getAttribute('href'));
@@ -303,20 +302,40 @@ async function getChapters(mangaId, invoke) {
       console.log('[WEBTOONS] titleNo extrait de mangaId:', titleNo);
     }
 
-    // 🟢 Sélecteurs en cascade : on essaie le plus permissif d'abord, puis
-    // des fallbacks pour les cas où le HTML est différent
+    // Sélecteurs en cascade
     var nodes = doc.querySelectorAll('a[href*="viewer?title_no="]');
     if (nodes.length === 0) {
-      // Fallback 1 : peut-être que & est encodé en &amp; et le ? mal géré
       nodes = doc.querySelectorAll('a[href*="viewer"][href*="title_no"]');
     }
     if (nodes.length === 0) {
-      // Fallback 2 : sélecteur Mihon classique
       nodes = doc.querySelectorAll('#_listUl li a, #_listUl > li > a');
     }
     if (nodes.length === 0) {
-      // Fallback 3 : tout ce qui contient "episode_no"
       nodes = doc.querySelectorAll('a[href*="episode_no"]');
+    }
+
+    // 🟢 NOUVEAU : si page=1 ET HTML brut ET 0 lien trouvé, on retente avec
+    // le rendu JS. Certaines séries longues (Omniscient Reader, etc.) servent
+    // probablement une version qui a besoin de JS pour peupler la liste.
+    if (p === 1 && nodes.length === 0 && !renderedTried) {
+      console.log('[WEBTOONS] HTML brut → 0 lien, retry avec rendu JS...');
+      try {
+        html = await invoke('fetch_html_rendered', { url: url, waitMs: 6000 });
+      } catch(e) { html = null; }
+      if (!isError(html)) {
+        doc = parseDOM(html);
+        nodes = doc.querySelectorAll('a[href*="viewer?title_no="]');
+        if (nodes.length === 0) {
+          nodes = doc.querySelectorAll('a[href*="viewer"][href*="title_no"]');
+        }
+        if (nodes.length === 0) {
+          nodes = doc.querySelectorAll('#_listUl li a, #_listUl > li > a');
+        }
+        if (nodes.length === 0) {
+          nodes = doc.querySelectorAll('a[href*="episode_no"]');
+        }
+        console.log('[WEBTOONS] Après rendu JS forcé → ' + nodes.length + ' nodes');
+      }
     }
 
     if (p === 1) {
@@ -325,12 +344,9 @@ async function getChapters(mangaId, invoke) {
 
     nodes.forEach(function(a) {
       var href = a.getAttribute('href') || '';
-      // Permissif : on prend tout ce qui ressemble à un viewer
       if (!href.includes('viewer') && !href.includes('episode_no')) return;
       var fullHref = absoluteUrl(href);
 
-      // Vérifier le title_no — mais si on n'arrive pas à l'extraire, on accepte
-      // (pour les cas où le HTML a perdu cette info)
       var hrefTitleNo = extractTitleNo(fullHref);
       if (hrefTitleNo && hrefTitleNo !== titleNo) return;
 
@@ -346,8 +362,6 @@ async function getChapters(mangaId, invoke) {
         if (nm) episodeNo = nm[1];
       }
 
-      // Si on n'a pas pu extraire un episode_no, c'est probablement pas un
-      // vrai lien chapitre (peut-être un lien "voir tous les épisodes")
       if (!episodeNo) return;
 
       var titleEl = a.querySelector('.subj, p.subj, span.subj');
