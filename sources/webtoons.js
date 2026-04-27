@@ -262,6 +262,7 @@ async function getChapters(mangaId, invoke) {
   for (var p = 1; p <= maxPages; p++) {
     var url = pageUrl(p);
     var html = null;
+    var renderedTried = false;
 
     // 1. Essai HTML brut (rapide, marche dans la plupart des cas)
     try {
@@ -270,6 +271,7 @@ async function getChapters(mangaId, invoke) {
 
     // 2. Fallback rendu JS si l'HTML brut échoue (CF persistant, etc.)
     if (isError(html)) {
+      renderedTried = true;
       try {
         html = await invoke('fetch_html_rendered', { url: url, waitMs: 4000 });
       } catch(e) { break; }
@@ -279,21 +281,59 @@ async function getChapters(mangaId, invoke) {
     var doc = parseDOM(html);
     var newOnPage = 0;
 
-    // Sélecteur permissif : tous les liens vers /viewer?title_no=...
-    var nodes = doc.querySelectorAll('a[href*="viewer?title_no="]');
-
-    // 🟢 Diagnostic : on log combien de liens ont été trouvés (avant filtrage)
-    // pour aider à debug si 0 chapitres ressort.
+    // 🟢 DIAGNOSTIC COMPLET sur la page 1 : montre exactement où ça coince
     if (p === 1) {
-      console.log('[WEBTOONS] page=1 : ' + nodes.length + ' liens viewer trouvés dans le HTML');
+      var allLinks = doc.querySelectorAll('a');
+      var viewerLinks = doc.querySelectorAll('a[href*="viewer"]');
+      var titleNoLinks = doc.querySelectorAll('a[href*="title_no="]');
+      var listUlEl = doc.querySelector('#_listUl');
+      console.log('[WEBTOONS] === DIAGNOSTIC page=1 ===');
+      console.log('[WEBTOONS] HTML length:', html.length, 'rendu_js:', renderedTried);
+      console.log('[WEBTOONS] Total <a>:', allLinks.length);
+      console.log('[WEBTOONS] <a> avec "viewer":', viewerLinks.length);
+      console.log('[WEBTOONS] <a> avec "title_no=":', titleNoLinks.length);
+      console.log('[WEBTOONS] #_listUl présent:', listUlEl !== null);
+      // Dump le 1er lien viewer trouvé pour voir le format réel
+      if (viewerLinks.length > 0) {
+        var first = viewerLinks[0];
+        console.log('[WEBTOONS] 1er lien viewer href:', first.getAttribute('href'));
+        console.log('[WEBTOONS] 1er lien viewer textContent[:80]:',
+          (first.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80));
+      }
+      console.log('[WEBTOONS] titleNo extrait de mangaId:', titleNo);
+    }
+
+    // 🟢 Sélecteurs en cascade : on essaie le plus permissif d'abord, puis
+    // des fallbacks pour les cas où le HTML est différent
+    var nodes = doc.querySelectorAll('a[href*="viewer?title_no="]');
+    if (nodes.length === 0) {
+      // Fallback 1 : peut-être que & est encodé en &amp; et le ? mal géré
+      nodes = doc.querySelectorAll('a[href*="viewer"][href*="title_no"]');
+    }
+    if (nodes.length === 0) {
+      // Fallback 2 : sélecteur Mihon classique
+      nodes = doc.querySelectorAll('#_listUl li a, #_listUl > li > a');
+    }
+    if (nodes.length === 0) {
+      // Fallback 3 : tout ce qui contient "episode_no"
+      nodes = doc.querySelectorAll('a[href*="episode_no"]');
+    }
+
+    if (p === 1) {
+      console.log('[WEBTOONS] Sélecteur final → ' + nodes.length + ' nodes');
     }
 
     nodes.forEach(function(a) {
       var href = a.getAttribute('href') || '';
-      if (!href.includes('viewer?title_no=')) return;
+      // Permissif : on prend tout ce qui ressemble à un viewer
+      if (!href.includes('viewer') && !href.includes('episode_no')) return;
       var fullHref = absoluteUrl(href);
 
-      if (extractTitleNo(fullHref) !== titleNo) return;
+      // Vérifier le title_no — mais si on n'arrive pas à l'extraire, on accepte
+      // (pour les cas où le HTML a perdu cette info)
+      var hrefTitleNo = extractTitleNo(fullHref);
+      if (hrefTitleNo && hrefTitleNo !== titleNo) return;
+
       if (seen.has(fullHref)) return;
       seen.add(fullHref);
 
@@ -305,6 +345,10 @@ async function getChapters(mangaId, invoke) {
         var nm = txt.match(/#\s*(\d+)/);
         if (nm) episodeNo = nm[1];
       }
+
+      // Si on n'a pas pu extraire un episode_no, c'est probablement pas un
+      // vrai lien chapitre (peut-être un lien "voir tous les épisodes")
+      if (!episodeNo) return;
 
       var titleEl = a.querySelector('.subj, p.subj, span.subj');
       var chapTitle = titleEl ? titleEl.textContent.trim() : a.textContent.trim();
