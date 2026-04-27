@@ -33,5 +33,12 @@
   "version": "1.0.0",
   "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/Roliascan.js",
   "icon_url": "https://roliascan.com/content/uploads/logo4.0.png"
+  },
+  {
+    "id": "raijin-scans",
+    "name": "Raijin Scans",
+    "version": "1.0.0",
+    "source_url": "L_URL_OU_TU_HEBERGES_LE_FICHIER.js",
+    "icon_url": "https://raijin-scans.fr/favicon.ico"
   }
 ]
