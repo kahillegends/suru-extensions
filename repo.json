@@ -40,12 +40,5 @@
   "version": "1.0.0",
   "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/Roliascan.js",
   "icon_url": "https://roliascan.com/content/uploads/logo4.0.png"
-  },
-  {
-  "id": "webtoons",
-  "name": "Webtoons",
-  "version": "1.0.0",
-  "source_url": "https://raw.githubusercontent.com/kahillegends/suru-extensions/main/sources/webtoons.js"
-  "icon_url": "https://img.icons8.com/?size=100&id=MthKdn1UOGBN&format=png&color=000000"
   }
 ]
