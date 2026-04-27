@@ -111,19 +111,13 @@ function parseMangaList(html) {
 async function search(query, page, invoke) {
   page = page || 0;
   if (!query || typeof query !== 'string') return [];
-
-  // Webtoons search ne pagine pas dans l'interface mobile/web standard.
-  // On renvoie [] pour les pages > 0 → pas de "voir plus" infini.
   if (page > 0) return [];
 
-  // 🟢 Le HTML de /en/search rendu côté serveur contient parfois 0 carte
-  // — les résultats sont peuplés en JS. On utilise directement fetch_html_rendered
-  // pour laisser Chromium exécuter le JS de la page.
   var url = baseUrl + '/' + lang + '/search?keyword=' + encodeURIComponent(query);
-  var html = await invoke('fetch_html_rendered', { url: url, waitMs: 5000 });
+  // 🟢 fetch_html en premier (Webtoons est SSR), rendu JS en fallback uniquement
+  var html = await invoke('fetch_html', { url: url });
   if (isError(html)) {
-    // Fallback sur le HTML brut au cas où
-    html = await invoke('fetch_html', { url: url });
+    html = await invoke('fetch_html_rendered', { url: url, waitMs: 5000 });
     if (isError(html)) return [];
   }
 
@@ -246,58 +240,63 @@ async function getMangaDetails(mangaId, invoke) {
 // Webtoons pagine sa liste d'épisodes (~10 par page). On boucle sur les pages
 // jusqu'à ce qu'on ait tout, ou jusqu'à hit un cap de sécurité (50 pages).
 //
-// 🟢 IMPORTANT : on utilise fetch_html_rendered partout parce que le HTML
-// brut renvoyé par Webtoons ne contient pas toujours #_listUl peuplé. Le
-// rendu JS garantit qu'on récupère les vraies cards d'épisodes.
+// 🟢 IMPORTANT : Webtoons sert sa liste d'épisodes en SSR (Server-Side
+// Rendered) — pas besoin de JS. fetch_html via FlareSolverr fonctionne
+// directement. Le rendu Chromium semble parfois renvoyer une version mobile
+// allégée sans la liste. Donc on essaie fetch_html EN PREMIER.
 async function getChapters(mangaId, invoke) {
   var allChapters = [];
   var seen = new Set();
-  var maxPages = 50; // garde-fou : ~500 chapitres max
+  var maxPages = 50;
   var titleNo = extractTitleNo(mangaId);
   if (!titleNo) {
     console.warn('[WEBTOONS] Pas de title_no dans:', mangaId);
     return [];
   }
 
-  // Construit l'URL de pagination en preservant le path original
   function pageUrl(p) {
-    // On retire toute occurrence existante de page= puis on ajoute la nouvelle
     var clean = mangaId.replace(/[?&]page=\d+/g, '');
     return clean + (clean.includes('?') ? '&' : '?') + 'page=' + p;
   }
 
   for (var p = 1; p <= maxPages; p++) {
     var url = pageUrl(p);
-    var html;
+    var html = null;
+
+    // 1. Essai HTML brut (rapide, marche dans la plupart des cas)
     try {
-      // Rendu JS systématique : Webtoons exige du JS pour peupler #_listUl
-      html = await invoke('fetch_html_rendered', { url: url, waitMs: 3000 });
-    } catch(e) { break; }
+      html = await invoke('fetch_html', { url: url });
+    } catch(e) { html = null; }
+
+    // 2. Fallback rendu JS si l'HTML brut échoue (CF persistant, etc.)
     if (isError(html)) {
-      // Fallback sur le HTML brut, sinon on abandonne
-      try { html = await invoke('fetch_html', { url: url }); }
-      catch(e) { break; }
+      try {
+        html = await invoke('fetch_html_rendered', { url: url, waitMs: 4000 });
+      } catch(e) { break; }
       if (isError(html)) break;
     }
 
     var doc = parseDOM(html);
     var newOnPage = 0;
 
-    // 🟢 Sélecteur ultra-permissif : tous les liens vers /viewer?title_no=X
-    // peu importe le wrapper (a, li, div). On filtre ensuite par title_no.
-    var nodes = doc.querySelectorAll('a[href*="/viewer?title_no="], a[href*="viewer?title_no="]');
+    // Sélecteur permissif : tous les liens vers /viewer?title_no=...
+    var nodes = doc.querySelectorAll('a[href*="viewer?title_no="]');
+
+    // 🟢 Diagnostic : on log combien de liens ont été trouvés (avant filtrage)
+    // pour aider à debug si 0 chapitres ressort.
+    if (p === 1) {
+      console.log('[WEBTOONS] page=1 : ' + nodes.length + ' liens viewer trouvés dans le HTML');
+    }
 
     nodes.forEach(function(a) {
       var href = a.getAttribute('href') || '';
       if (!href.includes('viewer?title_no=')) return;
       var fullHref = absoluteUrl(href);
 
-      // Match le bon title_no pour éviter les contaminations (ex. "stories liées")
       if (extractTitleNo(fullHref) !== titleNo) return;
       if (seen.has(fullHref)) return;
       seen.add(fullHref);
 
-      // Numéro d'épisode : depuis &episode_no=N ou texte "#N"
       var episodeNo = '';
       var em = fullHref.match(/[?&]episode_no=(\d+)/);
       if (em) episodeNo = em[1];
@@ -307,14 +306,11 @@ async function getChapters(mangaId, invoke) {
         if (nm) episodeNo = nm[1];
       }
 
-      // Titre du chapitre : <span class="subj">, <p class="subj">, ou texte du lien
       var titleEl = a.querySelector('.subj, p.subj, span.subj');
       var chapTitle = titleEl ? titleEl.textContent.trim() : a.textContent.trim();
-      // Tronque à la première ligne (Webtoons met parfois la date en dessous)
       chapTitle = chapTitle.split('\n')[0].trim();
       if (!chapTitle) chapTitle = 'Episode ' + episodeNo;
 
-      // Date : <span class="date">
       var dateEl = a.querySelector('.date');
       var date = dateEl ? dateEl.textContent.trim() : '';
 
@@ -327,14 +323,12 @@ async function getChapters(mangaId, invoke) {
       newOnPage++;
     });
 
-    console.log('[WEBTOONS] page=' + p + ' → ' + newOnPage + ' nouveaux épisodes (total: ' + allChapters.length + ')');
+    console.log('[WEBTOONS] page=' + p + ' → ' + newOnPage + ' nouveaux (total: ' + allChapters.length + ')');
 
-    // Si la page n'a apporté aucun nouveau chapitre, c'est qu'on a dépassé
-    // la dernière page de pagination → on s'arrête.
     if (newOnPage === 0) break;
   }
 
-  // Tri décroissant par numéro d'épisode (récent en haut, comme Mihon)
+  // Tri décroissant par numéro d'épisode
   allChapters.sort(function(a, b) {
     var na = parseInt(a.number, 10); if (isNaN(na)) na = -1;
     var nb = parseInt(b.number, 10); if (isNaN(nb)) nb = -1;
