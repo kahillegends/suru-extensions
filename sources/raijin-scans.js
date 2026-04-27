@@ -82,10 +82,17 @@ function parseMangaList(html) {
   var results = [];
   var seenSlugs = new Set();
 
+  // Mots-clés génériques à rejeter pour le titre (le thème custom Raijin
+  // colle parfois juste "Manhwa" / "Manga" en tant que titre dans les cards).
+  var GENERIC = ['manhwa', 'manhua', 'manga', 'webtoon', 'comic', 'comics', 'series'];
+  function isGeneric(t) {
+    if (!t) return true;
+    var lc = t.trim().toLowerCase();
+    return GENERIC.indexOf(lc) >= 0 || lc.length < 3;
+  }
+
   doc.querySelectorAll('a[href*="/manga/"]').forEach(function(a) {
     var href = a.getAttribute('href') || '';
-    // Ne garder que les liens vers une PAGE SÉRIE (/manga/slug/), pas un chapitre
-    // (/manga/slug/N/). Le pattern est : /manga/<slug-avec-tirets>/ sans rien après.
     var m = href.match(/\/manga\/([a-z0-9-]+)\/?(?:\?|#|$)/i);
     if (!m) return;
     var slug = m[1];
@@ -94,37 +101,49 @@ function parseMangaList(html) {
 
     var fullHref = absoluteUrl(href);
 
-    // Conteneur : on remonte au parent qui contient à la fois titre et image
     var container = a.closest('article, li, div[class*="card"], div[class*="manga"], div[class*="item"], div[class*="entry"], .page-item-detail, .c-tabs-item__content')
                  || a.parentElement
                  || a;
 
     var img = container.querySelector('img');
+
+    // 🟢 Stratégie de titre robuste : on essaie plusieurs sources et on
+    // refuse les titres génériques. Priorité : alt de l'image (Madara met
+    // le vrai titre dedans) → attribut title du <a> → .post-title → texte du <a>
+    var candidates = [];
+    if (img) candidates.push(img.getAttribute('alt') || '');
+    candidates.push(a.getAttribute('title') || '');
     var titleEl = container.querySelector('.post-title, .tt, h1, h2, h3, h4, h5, .manga-title');
+    if (titleEl) candidates.push(titleEl.textContent.trim());
+    candidates.push(a.textContent.trim());
 
     var title = '';
-    if (titleEl) title = titleEl.textContent.trim();
-    if (!title) title = a.getAttribute('title') || '';
-    if (!title && img) title = img.getAttribute('alt') || '';
-    if (!title) title = a.textContent.trim();
+    for (var i = 0; i < candidates.length; i++) {
+      var c = (candidates[i] || '')
+        .split('\n')[0]
+        .replace(/\s+/g, ' ')
+        .replace(/^(Ch\.?\s*\d+\s*)+/i, '')
+        .replace(/(New|Premium|HOT|UP)\s*$/i, '')
+        .trim();
+      if (c && !isGeneric(c) && !/^ch(?:apitre|apter)?\.?\s*\d+/i.test(c)) {
+        title = c;
+        break;
+      }
+    }
 
-    // Nettoyer tout le bruit (numéros, "il y a N j", "New", "Premium", etc.)
-    title = title
-      .split('\n')[0]            // Premier ligne seulement
-      .replace(/\s+/g, ' ')      // Espaces multiples
-      .replace(/^(Ch\.?\s*\d+\s*)+/i, '') // Préfixes "Ch. 12"
-      .replace(/(New|Premium|HOT|UP)\s*$/i, '')
-      .trim();
+    // Dernier recours : reconstituer depuis le slug
+    if (!title) {
+      title = slug.replace(/-/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+    }
 
-    if (!title || title.length < 2) return;
-    // Si le titre est juste un numéro de chapitre, c'est qu'on a chopé un lien
-    // de chapitre déguisé → on skip
-    if (/^ch(?:apitre|apter)?\.?\s*\d+/i.test(title)) return;
+    var cover = extractImgUrl(img);
+    // Filtrer les placeholders (drapeau coréen, logo, etc.)
+    if (cover && /placeholder|drapeau|flag|default|logo/i.test(cover)) cover = '';
 
     results.push({
       id: fullHref,
       title: title,
-      cover: extractImgUrl(img),
+      cover: cover,
       source_id: 'raijin-scans'
     });
   });
@@ -215,25 +234,70 @@ async function getMangaDetails(mangaId, invoke) {
   var doc = parseDOM(html);
   var details = { id: mangaId, source_id: 'raijin-scans' };
 
-  // Titre : essais multiples (MangaStream / Madara / thème custom)
-  var titleEl = doc.querySelector('.post-title h1, .post-title h3, h1.entry-title, .manga-info h1, .summary_content h1');
-  if (!titleEl) titleEl = doc.querySelector('meta[property="og:title"]');
-  if (titleEl) {
-    details.title = titleEl.tagName === 'META'
-      ? titleEl.getAttribute('content').trim()
-      : titleEl.textContent.trim();
+  // 🟢 Mots-clés génériques à REJETER pour le titre — sur le thème custom Raijin,
+  // un h1 contient parfois juste le badge de catégorie ("Manhwa", "Manhua",
+  // "Manga"), pas le vrai titre de la série.
+  var GENERIC_TITLES = ['manhwa', 'manhua', 'manga', 'webtoon', 'comic', 'comics', 'series'];
+  function isGenericTitle(t) {
+    if (!t) return true;
+    var lc = t.trim().toLowerCase();
+    return GENERIC_TITLES.indexOf(lc) >= 0 || lc.length < 3;
   }
 
-  // Cover
-  var coverEl = doc.querySelector('.summary_image img, .manga-info-pic img, .thumb img, .thumbook img, .tab-summary img');
-  if (!coverEl) coverEl = doc.querySelector('meta[property="og:image"]');
-  if (coverEl) {
-    if (coverEl.tagName === 'META') {
-      details.cover = absoluteUrl(coverEl.getAttribute('content'));
-    } else {
-      details.cover = extractImgUrl(coverEl);
+  // Titre : og:title en PREMIER (toujours fiable sur WordPress), puis fallbacks
+  var title = '';
+  var ogTitle = doc.querySelector('meta[property="og:title"]');
+  if (ogTitle) {
+    title = (ogTitle.getAttribute('content') || '').trim();
+    // Nettoyer suffixes type " - Raijin Scans" / " | Raijin Scans"
+    title = title.replace(/\s*[-|–]\s*Raijin\s*Scans?.*$/i, '').trim();
+  }
+  if (isGenericTitle(title)) {
+    var titleEl = doc.querySelector('.post-title h1, .post-title h3, h1.entry-title, .manga-info h1, .summary_content h1');
+    if (titleEl) {
+      var candidate = titleEl.textContent.trim();
+      if (!isGenericTitle(candidate)) title = candidate;
     }
   }
+  // Dernier recours : extraire depuis le synopsis "Lecture gratuite de XXX en français"
+  if (isGenericTitle(title)) {
+    var synFromMeta = doc.querySelector('meta[property="og:description"]');
+    if (synFromMeta) {
+      var d = synFromMeta.getAttribute('content') || '';
+      var fromSyn = d.match(/Lecture gratuite de\s+(.+?)\s+en français/i);
+      if (fromSyn) title = fromSyn[1].trim();
+    }
+  }
+  // Vraiment dernier recours : depuis le slug de l'URL
+  if (isGenericTitle(title)) {
+    var slugFromUrl = mangaId.match(/\/manga\/([a-z0-9-]+)/i);
+    if (slugFromUrl) {
+      title = slugFromUrl[1].replace(/-/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+    }
+  }
+  details.title = title;
+
+  // Cover : og:image en PREMIER (toujours la vraie cover)
+  var cover = '';
+  var ogImage = doc.querySelector('meta[property="og:image"]');
+  if (ogImage) {
+    cover = (ogImage.getAttribute('content') || '').trim();
+    if (cover && !cover.startsWith('http')) cover = absoluteUrl(cover);
+  }
+  // Fallback DOM si og:image est un placeholder (drapeau coréen, etc.)
+  // ou si elle pointe vers le logo du site
+  function isPlaceholderCover(c) {
+    if (!c) return true;
+    return /placeholder|logo|default|no-image|drapeau|flag/i.test(c);
+  }
+  if (isPlaceholderCover(cover)) {
+    var coverEl = doc.querySelector('.summary_image img, .manga-info-pic img, .thumb img, .thumbook img, .tab-summary img');
+    if (coverEl) {
+      var fromDom = extractImgUrl(coverEl);
+      if (fromDom && !isPlaceholderCover(fromDom)) cover = fromDom;
+    }
+  }
+  details.cover = cover;
 
   // Synopsis
   var synEl = doc.querySelector('.summary__content p, .summary__content, .description-summary p, .manga-info-text p, [itemprop="description"]');
@@ -257,7 +321,7 @@ async function getMangaDetails(mangaId, invoke) {
 
   // Statut
   var status = 'En cours';
-  var statusSelectors = ['.post-status .summary-content', '.tsinfo .imptdt:first-child i', '.infotable tr:first-child td:last-child', '.post-content_item:contains(Status) .summary-content'];
+  var statusSelectors = ['.post-status .summary-content', '.tsinfo .imptdt:first-child i', '.infotable tr:first-child td:last-child'];
   for (var j = 0; j < statusSelectors.length; j++) {
     try {
       var sEl = doc.querySelector(statusSelectors[j]);
@@ -269,10 +333,6 @@ async function getMangaDetails(mangaId, invoke) {
       }
     } catch(e) {}
   }
-  // Détection en dur si rien trouvé via sélecteurs
-  if (status === 'En cours') {
-    if (/\bterminé\b/i.test(html) && !/\ben cours\b/i.test(html)) status = 'Terminé';
-  }
   details.status = status;
 
   // Genres
@@ -283,6 +343,7 @@ async function getMangaDetails(mangaId, invoke) {
   });
   details.genres = genres;
 
+  console.log('[RAIJIN] getMangaDetails → titre="' + details.title + '" cover=' + (details.cover ? 'oui' : 'non'));
   return details;
 }
 
